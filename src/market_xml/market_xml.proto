@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package market_xml;
+
+message Shop {
+    // required
+    string name = 1;
+    string company = 2;
+    string url = 3;
+    repeated Currency currencies = 4;
+    repeated Category categories = 5;
+    repeated DeliveryOption delivery_options = 6;
+
+    // optional
+    repeated DeliveryOption pickup_options = 7;
+    string platform = 8;
+    string version = 9;
+    string agency = 10;
+    string email = 11;
+
+    // TODO
+    // gifts
+    // promos
+}
+
+message Currency {
+    string id = 1;
+    string rage = 2;
+    string plus = 3;
+}
+
+message Category {
+    uint64 id = 1;
+    uint64 parent_id = 2;
+    string name = 3;
+}
+
+message DeliveryOption {
+    uint32 cost = 1;
+    string days = 2;
+    uint32 order_before = 3; // default 13
+}
+
+message Offers {
+    repeated Offer offers = 1;
+}
+
+message Offer {
+    string id = 1;
+    string type = 2;
+    bool available = 3;  // default true
+
+    string name = 4;
+    uint64 category_id = 5;
+    Price price = 6;
+    Price old_price = 7;
+    string currency_id = 8;
+    string url = 9;
+    string vendor = 10;
+    string vendor_code = 11;
+    string model = 12;
+    string type_prefix = 13;
+    uint32 bid = 14;
+    uint32 cbid = 15;
+    bool enable_auto_discounts = 16;
+    string picture = 17;
+    bool delivery = 18;  // default true
+    bool pickup = 19;  // default true
+    repeated DeliveryOption delivery_options = 20;
+    repeated DeliveryOption pickup_options = 21;
+    string local_delivery_days = 22;  // TODO: make it oneof
+    bool store = 23;  // default true
+    string description = 24;
+    string sales_notes = 25;
+    uint32 min_quantity = 26;  // default 1
+    bool manufacturer_warranty = 27;
+    string country_of_origin = 28;
+    bool adult = 29;
+    repeated string barcodes = 30;
+    repeated Param params = 31;
+    Condition condition = 32;
+    string credit_template_id = 33;
+    string expiry = 34;
+    float weight = 35;
+    string dimensions = 36;
+    bool downloadable = 37;
+    Age age = 38;
+    uint32 group_id = 39;
+
+    message Price {
+        float price = 1;
+        bool from = 2;
+    }
+
+    message Param {
+        string name = 1;
+        string unit = 2;
+        string value = 3;
+    }
+
+    message Condition {
+        string type = 1;
+        string reason = 2;
+    }
+
+    message Age {
+        string unit = 1;
+        uint32 value = 2;
+    }
+}

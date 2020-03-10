@@ -1,0 +1,17 @@
+[package]
+name = "market-xml"
+version = "0.1.0"
+authors = ["Alexander Koval <kovalidis@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+failure = "0.1"
+failure_derive = "0.1"
+prost = "0.6"
+prost-types = "0.6"
+quick-xml = "0.17"
+
+[build-dependencies]
+prost-build = "0.6"
