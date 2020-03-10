@@ -9,7 +9,7 @@ use std::io::prelude::BufRead;
 
 use crate::market_xml::{Category, Condition, Currency, DeliveryOption, Offer, Param, Price, Shop};
 
-struct MarketXmlConfig {
+pub(crate) struct MarketXmlConfig {
     offer_tags: HashSet<Vec<u8>>,
 }
 
@@ -23,12 +23,12 @@ impl Default for MarketXmlConfig {
     }
 }
 
-struct MarketXmlParser<B: BufRead> {
+pub(crate) struct MarketXmlParser<B: BufRead> {
     config: MarketXmlConfig,
     xml_reader: XmlReader<B>,
     buf: Vec<u8>,
-    stack: Vec<String>,
     state: State,
+    shop: Shop,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -40,7 +40,8 @@ enum State {
     End,
 }
 
-enum ParsedItem {
+#[derive(PartialEq, Debug)]
+pub(crate) enum ParsedItem {
     Offer(Offer),
     Shop(Shop),
 }
@@ -50,27 +51,26 @@ impl<B: BufRead> Iterator for MarketXmlParser<B> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            self.state = match self.state {
+            match self.state {
                 State::Begin => {
                     match self.begin() {
-                        Ok(state) => state,
+                        Ok(state) => self.state = state,
                         Err(e) => return Some(Err(e)),
                     }
                 }
                 State::YmlCatalog => {
                     match self.parse_yml_catalog() {
-                        Ok(state) => state,
+                        Ok(state) => self.state = state,
                         Err(e) => return Some(Err(e)),
                     }
                 }
                 State::Shop => {
-                    let mut shop = Shop::default();
-                    match self.parse_shop(&mut shop) {
+                    match self.parse_shop() {
                         Ok(state) => {
+                            self.state = state;
                             if state == State::YmlCatalog {
-                                return Some(Ok(ParsedItem::Shop(shop)));
+                                return Some(Ok(ParsedItem::Shop(self.shop.clone())));
                             }
-                            state
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -81,7 +81,7 @@ impl<B: BufRead> Iterator for MarketXmlParser<B> {
                             return Some(Ok(ParsedItem::Offer(offer)));
                         }
                         Ok(None) => {
-                            State::Shop
+                            self.state = State::Shop;
                         }
                         Err(e) => return Some(Err(e)),
                     }
@@ -89,21 +89,21 @@ impl<B: BufRead> Iterator for MarketXmlParser<B> {
                 State::End => {
                     return None;
                 }
-            };
+            }
         }
     }
 }
 
 impl<B: BufRead> MarketXmlParser<B> {
-    fn new(config: MarketXmlConfig, reader: B) -> Self {
+    pub(crate) fn new(config: MarketXmlConfig, reader: B) -> Self {
         let mut xml_reader = XmlReader::from_reader(reader);
         xml_reader.trim_text(true);
         Self {
             config,
             xml_reader,
             buf: vec!(),
-            stack: vec!(),
             state: State::Begin,
+            shop: Shop::default(),
         }
     }
 
@@ -147,7 +147,7 @@ impl<B: BufRead> MarketXmlParser<B> {
         }
     }
 
-    fn parse_shop(&mut self, shop: &mut Shop) -> Result<State, Error> {
+    fn parse_shop(&mut self) -> Result<State, Error> {
         Ok(loop {
             match self.xml_reader.read_event(&mut self.buf)? {
                 Event::Start(tag) |
@@ -156,7 +156,7 @@ impl<B: BufRead> MarketXmlParser<B> {
                         break State::Offers;
                     }
                     let tag = tag.to_owned();
-                    self.parse_shop_field(shop, tag)?;
+                    self.parse_shop_field(tag)?;
                 }
                 Event::End(tag) => {
                     let tag_name = tag.name();
@@ -170,25 +170,25 @@ impl<B: BufRead> MarketXmlParser<B> {
         })
     }
 
-    fn parse_shop_field(&mut self, shop: &mut Shop, tag: BytesStart) -> Result<(), Error> {
+    fn parse_shop_field(&mut self, tag: BytesStart) -> Result<(), Error> {
         match tag.name() {
             b"name" => {
-                shop.name = self.read_text()?;
+                self.shop.name = self.read_text()?;
             }
             b"company" => {
-                shop.company = self.read_text()?;
+                self.shop.company = self.read_text()?;
             }
             b"url" => {
-                shop.url = self.read_text()?;
+                self.shop.url = self.read_text()?;
             }
             b"currencies" => {
-                shop.currencies = self.parse_currencies()?;
+                self.shop.currencies = self.parse_currencies()?;
             }
             b"categories" => {
-                shop.categories = self.parse_categories()?;
+                self.shop.categories = self.parse_categories()?;
             }
             b"delivery-options" => {
-                shop.delivery_options = self.parse_delivery_options()?;
+                self.shop.delivery_options = self.parse_delivery_options()?;
             }
             _ => {}
         }
@@ -778,6 +778,9 @@ mod tests {
             _ => Err(format_err!("Expected shop"))
         }?;
         assert_eq!(&s.name, "");
+
+        println!("{:?}", parser.next());
+        assert!(parser.next().is_none());
 
         Ok(())
     }
