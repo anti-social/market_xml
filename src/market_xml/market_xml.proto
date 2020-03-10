@@ -25,7 +25,7 @@ message Shop {
 
 message Currency {
     string id = 1;
-    string rage = 2;
+    string rate = 2;
     string plus = 3;
 }
 
@@ -86,25 +86,25 @@ message Offer {
     bool downloadable = 37;
     Age age = 38;
     uint32 group_id = 39;
+}
 
-    message Price {
-        float price = 1;
-        bool from = 2;
-    }
+message Price {
+    float price = 1;
+    bool from = 2;
+}
 
-    message Param {
-        string name = 1;
-        string unit = 2;
-        string value = 3;
-    }
+message Param {
+    string name = 1;
+    string unit = 2;
+    string value = 3;
+}
 
-    message Condition {
-        string type = 1;
-        string reason = 2;
-    }
+message Condition {
+    string type = 1;
+    string reason = 2;
+}
 
-    message Age {
-        string unit = 1;
-        uint32 value = 2;
-    }
+message Age {
+    string unit = 1;
+    uint32 value = 2;
 }
