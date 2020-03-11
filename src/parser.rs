@@ -1,13 +1,40 @@
-use failure::{Error, format_err};
-
 use quick_xml::{Reader as XmlReader, Error as XmlError};
 use quick_xml::events::{Event, BytesStart};
 use quick_xml::events::attributes::Attributes;
 
+use snafu::{ResultExt, Snafu};
+
 use std::collections::HashSet;
 use std::io::prelude::BufRead;
+use std::num::{ParseFloatError, ParseIntError};
+use std::str::ParseBoolError;
 
 use crate::market_xml::{Category, Condition, Currency, DeliveryOption, Offer, Param, Price, Shop};
+
+
+#[derive(Debug, Snafu)]
+pub(crate) enum MarketXmlError {
+    #[snafu(display("Xml error: {}", source))]
+    Xml {
+        source: XmlError,
+    },
+    #[snafu(display("Unexpected tag: {}", tag))]
+    UnexpectedTag {
+        tag: String,
+    },
+    #[snafu(display("parse bool: {}", source))]
+    ParseBool {
+        source: ParseBoolError,
+    },
+    #[snafu(display("parse float: {}", source))]
+    ParseFloat {
+        source: ParseFloatError,
+    },
+    #[snafu(display("parse integer: {}", source))]
+    ParseInt {
+        source: ParseIntError,
+    },
+}
 
 pub(crate) struct MarketXmlConfig {
     offer_tags: HashSet<Vec<u8>>,
@@ -47,7 +74,7 @@ pub(crate) enum ParsedItem {
 }
 
 impl<B: BufRead> Iterator for MarketXmlParser<B> {
-    type Item = Result<ParsedItem, Error>;
+    type Item = Result<ParsedItem, MarketXmlError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -107,28 +134,28 @@ impl<B: BufRead> MarketXmlParser<B> {
         }
     }
 
-    fn begin(&mut self) -> Result<State, Error> {
+    fn begin(&mut self) -> Result<State, MarketXmlError> {
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(tag) => {
                     if tag.name() == b"yml_catalog" {
                         return Ok(State::YmlCatalog);
                     }
-                    return Err(format_err!(
-                        "Unexpected tag: {}", String::from_utf8_lossy(tag.name())
-                    ));
+                    return Err(MarketXmlError::UnexpectedTag {
+                        tag: String::from_utf8_lossy(tag.name()).to_string()
+                    });
                 }
                 Event::Eof => {
-                    return Err(XmlError::UnexpectedEof("yandex market file".to_string()).into());
+                    return Err(XmlError::UnexpectedEof("yandex market file".to_string())).context(Xml);
                 }
                 _ => {}
             }
         }
     }
 
-    fn parse_yml_catalog(&mut self) -> Result<State, Error> {
+    fn parse_yml_catalog(&mut self) -> Result<State, MarketXmlError> {
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(tag) => {
                     if tag.name() == b"shop" {
                         return Ok(State::Shop);
@@ -140,16 +167,16 @@ impl<B: BufRead> MarketXmlParser<B> {
                     }
                 }
                 Event::Eof => {
-                    return Err(XmlError::UnexpectedEof("yml_catalog".to_string()).into());
+                    return Err(XmlError::UnexpectedEof("yml_catalog".to_string())).context(Xml);
                 }
                 _ => {}
             }
         }
     }
 
-    fn parse_shop(&mut self) -> Result<State, Error> {
+    fn parse_shop(&mut self) -> Result<State, MarketXmlError> {
         Ok(loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(tag) |
                 Event::Empty(tag) => {
                     if tag.name() == b"offers" {
@@ -164,13 +191,13 @@ impl<B: BufRead> MarketXmlParser<B> {
                         break State::YmlCatalog;
                     }
                 }
-                Event::Eof => return Err(XmlError::UnexpectedEof("shop".to_string()).into()),
+                Event::Eof => return Err(XmlError::UnexpectedEof("shop".to_string())).context(Xml),
                 _ => {}
             }
         })
     }
 
-    fn parse_shop_field(&mut self, tag: BytesStart) -> Result<(), Error> {
+    fn parse_shop_field(&mut self, tag: BytesStart) -> Result<(), MarketXmlError> {
         match tag.name() {
             b"name" => {
                 self.shop.name = self.read_text()?;
@@ -195,10 +222,10 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(())
     }
 
-    fn parse_currencies(&mut self) -> Result<Vec<Currency>, Error> {
+    fn parse_currencies(&mut self) -> Result<Vec<Currency>, MarketXmlError> {
         let mut currencies = vec!();
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(tag) |
                 Event::Empty(tag) => {
                     if tag.name() == b"currency" {
@@ -211,16 +238,16 @@ impl<B: BufRead> MarketXmlParser<B> {
                         return Ok(currencies);
                     }
                 }
-                Event::Eof => Err(XmlError::UnexpectedEof("currencies".to_string()))?,
+                Event::Eof => Err(XmlError::UnexpectedEof("currencies".to_string())).context(Xml)?,
                 _ => {}
             }
         }
     }
 
-    fn parse_currency(&mut self, attrs: &mut Attributes) -> Result<Currency, Error> {
+    fn parse_currency(&mut self, attrs: &mut Attributes) -> Result<Currency, MarketXmlError> {
         let mut currency = Currency::default();
         for attr_res in attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             let value = String::from_utf8_lossy(&attr.value).to_string();
             match attr.key {
                 b"id" => {
@@ -238,10 +265,10 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(currency)
     }
 
-    fn parse_categories(&mut self) -> Result<Vec<Category>, Error> {
+    fn parse_categories(&mut self) -> Result<Vec<Category>, MarketXmlError> {
         let mut categories = vec!();
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(tag) |
                 Event::Empty(tag) => {
                     if tag.name() == b"category" {
@@ -254,23 +281,23 @@ impl<B: BufRead> MarketXmlParser<B> {
                         return Ok(categories);
                     }
                 }
-                Event::Eof => Err(XmlError::UnexpectedEof("categories".to_string()))?,
+                Event::Eof => Err(XmlError::UnexpectedEof("categories".to_string())).context(Xml)?,
                 _ => {}
             }
         }
     }
 
-    fn parse_category(&mut self, attrs: &mut Attributes) -> Result<Category, Error> {
+    fn parse_category(&mut self, attrs: &mut Attributes) -> Result<Category, MarketXmlError> {
         let mut category = Category::default();
         for attr_res in attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             let value = String::from_utf8_lossy(&attr.value);
             match attr.key {
                 b"id" => {
-                    category.id = value.parse()?;
+                    category.id = Self::parse_u64(value.as_ref())?;
                 }
                 b"parentId" => {
-                    category.parent_id = value.parse()?;
+                    category.parent_id = Self::parse_u64(value.as_ref())?;
                 }
                 _ => {}
             }
@@ -279,9 +306,9 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(category)
     }
 
-    fn parse_offers(&mut self) -> Result<Option<Offer>, Error> {
+    fn parse_offers(&mut self) -> Result<Option<Offer>, MarketXmlError> {
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(tag) => {
                     if tag.name() == b"offer" {
                         let tag = tag.to_owned();
@@ -293,7 +320,7 @@ impl<B: BufRead> MarketXmlParser<B> {
                         return Ok(None)
                     }
                 }
-                Event::Eof => Err(XmlError::UnexpectedEof("offers".to_string()))?,
+                Event::Eof => Err(XmlError::UnexpectedEof("offers".to_string())).context(Xml)?,
                 _ => {}
             }
 
@@ -301,7 +328,7 @@ impl<B: BufRead> MarketXmlParser<B> {
         }
     }
 
-    fn parse_offer(&mut self, attrs: &mut Attributes) -> Result<Offer, Error> {
+    fn parse_offer(&mut self, attrs: &mut Attributes) -> Result<Offer, MarketXmlError> {
         let mut offer = Offer::default();
         self.parse_offer_attributes(attrs, &mut offer)?;
         self.parse_offer_fields(&mut offer)?;
@@ -310,9 +337,9 @@ impl<B: BufRead> MarketXmlParser<B> {
 
     fn parse_offer_attributes(
         &self, attrs: &mut Attributes, offer: &mut Offer
-    ) -> Result<(), Error> {
+    ) -> Result<(), MarketXmlError> {
         for attr_res in attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             match attr.key {
                 b"id" => {
                     offer.id = String::from_utf8_lossy(&attr.value).to_string();
@@ -321,10 +348,10 @@ impl<B: BufRead> MarketXmlParser<B> {
                     offer.r#type = String::from_utf8_lossy(&attr.value).to_string();
                 }
                 b"bid" => {
-                    offer.bid = String::from_utf8_lossy(&attr.value).to_string().parse()?;
+                    offer.bid = String::from_utf8_lossy(&attr.value).to_string().parse().context(ParseInt)?;
                 }
                 b"cbid" => {
-                    offer.cbid = String::from_utf8_lossy(&attr.value).to_string().parse()?;
+                    offer.cbid = String::from_utf8_lossy(&attr.value).to_string().parse().context(ParseInt)?;
                 }
                 b"available" => {
                     offer.available = match attr.value.as_ref() {
@@ -339,9 +366,9 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(())
     }
 
-    fn parse_offer_fields(&mut self, offer: &mut Offer) -> Result<(), Error> {
+    fn parse_offer_fields(&mut self, offer: &mut Offer) -> Result<(), MarketXmlError> {
         loop {
-            let event = self.xml_reader.read_event(&mut self.buf)?;
+            let event = self.xml_reader.read_event(&mut self.buf).context(Xml)?;
             match event {
                 Event::Start(tag) |
                 Event::Empty(tag) => {
@@ -353,14 +380,14 @@ impl<B: BufRead> MarketXmlParser<B> {
                         break;
                     }
                 }
-                Event::Eof => return Err(XmlError::UnexpectedEof("Offer".to_string()).into()),
+                Event::Eof => return Err(XmlError::UnexpectedEof("Offer".to_string())).context(Xml),
                 _ => {}
             }
         }
         Ok(())
     }
 
-    fn parse_offer_field(&mut self, tag: BytesStart, offer: &mut Offer) -> Result<(), Error> {
+    fn parse_offer_field(&mut self, tag: BytesStart, offer: &mut Offer) -> Result<(), MarketXmlError> {
         match tag.name() {
             b"name" => {
                 offer.name = self.read_text()?;
@@ -453,10 +480,10 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(())
     }
 
-    fn parse_delivery_options(&mut self) -> Result<Vec<DeliveryOption>, Error> {
+    fn parse_delivery_options(&mut self) -> Result<Vec<DeliveryOption>, MarketXmlError> {
         let mut options = vec!();
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(tag) |
                 Event::Empty(tag) => {
                     if tag.name() == b"option" {
@@ -467,26 +494,26 @@ impl<B: BufRead> MarketXmlParser<B> {
                 Event::End(_) => {
                     break;
                 }
-                Event::Eof => Err(XmlError::UnexpectedEof("Delivery options".to_string()))?,
-                _ => Err(XmlError::TextNotFound)?,
+                Event::Eof => Err(XmlError::UnexpectedEof("Delivery options".to_string())).context(Xml)?,
+                _ => Err(XmlError::TextNotFound).context(Xml)?,
             }
         }
         Ok(options)
     }
 
-    fn parse_delivery_option(&self, tag_attrs: &mut Attributes) -> Result<DeliveryOption, Error> {
+    fn parse_delivery_option(&self, tag_attrs: &mut Attributes) -> Result<DeliveryOption, MarketXmlError> {
         let mut option = DeliveryOption::default();
         for attr_res in tag_attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             match attr.key {
                 b"cost" => {
-                    option.cost = String::from_utf8_lossy(&attr.value).parse()?;
+                    option.cost = String::from_utf8_lossy(&attr.value).parse().context(ParseInt)?;
                 }
                 b"days" => {
                     option.days = String::from_utf8_lossy(&attr.value).to_string();
                 }
                 b"order-before" => {
-                    option.order_before = String::from_utf8_lossy(&attr.value).parse()?;
+                    option.order_before = String::from_utf8_lossy(&attr.value).parse().context(ParseInt)?;
                 }
                 _ => {}
             }
@@ -494,11 +521,11 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(option)
     }
 
-    fn parse_price(&mut self, tag_attrs: &mut Attributes) -> Result<Price, Error> {
+    fn parse_price(&mut self, tag_attrs: &mut Attributes) -> Result<Price, MarketXmlError> {
         let mut price = Price::default();
         price.price = self.read_f32()?;
         for attr_res in tag_attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             if attr.key == b"from" && attr.value.as_ref() == b"true" {
                 price.from = true;
             }
@@ -506,11 +533,11 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(price)
     }
 
-    fn parse_param(&mut self, tag_attrs: &mut Attributes) -> Result<Param, Error> {
+    fn parse_param(&mut self, tag_attrs: &mut Attributes) -> Result<Param, MarketXmlError> {
         let mut param = Param::default();
         param.value = self.read_text()?;
         for attr_res in tag_attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             match attr.key {
                 b"name" => {
                     param.name = String::from_utf8_lossy(attr.value.as_ref()).to_string();
@@ -524,10 +551,10 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(param)
     }
 
-    fn parse_condition(&mut self, tag_attrs: &mut Attributes) -> Result<Condition, Error> {
+    fn parse_condition(&mut self, tag_attrs: &mut Attributes) -> Result<Condition, MarketXmlError> {
         let mut condition = Condition::default();
         for attr_res in tag_attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             match attr.key {
                 b"type" => {
                     condition.r#type = String::from_utf8_lossy(attr.value.as_ref()).to_string();
@@ -536,7 +563,7 @@ impl<B: BufRead> MarketXmlParser<B> {
             }
         }
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Start(ref tag) => {
                     let tag_name = tag.name();
                     match tag_name {
@@ -547,16 +574,16 @@ impl<B: BufRead> MarketXmlParser<B> {
                     }
                 }
                 Event::End(_) => break,
-                Event::Eof => return Err(XmlError::UnexpectedEof("Condition".to_string()).into()),
-                _ => return Err(XmlError::TextNotFound.into()),
+                Event::Eof => return Err(XmlError::UnexpectedEof("Condition".to_string())).context(Xml),
+                _ => return Err(XmlError::TextNotFound).context(Xml),
             }
         }
         Ok(condition)
     }
 
-    fn parse_credit_template(&self, tag_attrs: &mut Attributes) -> Result<Option<String>, Error> {
+    fn parse_credit_template(&self, tag_attrs: &mut Attributes) -> Result<Option<String>, MarketXmlError> {
         for attr_res in tag_attrs {
-            let attr = attr_res?;
+            let attr = attr_res.context(Xml)?;
             if attr.key == b"id" {
                 return Ok(Some(String::from_utf8_lossy(&attr.value).to_string()));
             }
@@ -564,54 +591,63 @@ impl<B: BufRead> MarketXmlParser<B> {
         Ok(None)
     }
 
-    fn read_text(&mut self) -> Result<String, Error> {
+    fn read_text(&mut self) -> Result<String, MarketXmlError> {
         self.read_text_and_map(|t| Ok(t.to_string()))
     }
 
-    fn read_bool(&mut self) -> Result<bool, Error> {
-        self.read_text_and_map(|t| Ok(t.parse()?))
+    fn read_bool(&mut self) -> Result<bool, MarketXmlError> {
+        self.read_text_and_map(|t| Ok(t.parse().context(ParseBool)?))
     }
 
-    fn read_f64(&mut self) -> Result<f64, Error> {
-        self.read_text_and_map(|t| Ok(t.parse()?))
+    fn read_f64(&mut self) -> Result<f64, MarketXmlError> {
+        self.read_text_and_map(|t| Ok(t.parse().context(ParseFloat)?))
     }
 
-    fn read_f32(&mut self) -> Result<f32, Error> {
-        self.read_text_and_map(|t| Ok(t.parse()?))
+    fn read_f32(&mut self) -> Result<f32, MarketXmlError> {
+        self.read_text_and_map(|t| Ok(t.parse().context(ParseFloat)?))
     }
 
-    fn read_u64(&mut self) -> Result<u64, Error> {
-        self.read_text_and_map(|t| Ok(t.parse()?))
+    fn read_u64(&mut self) -> Result<u64, MarketXmlError> {
+        self.read_text_and_map(Self::parse_u64)
     }
 
-    fn read_text_and_map<F, T>(&mut self, f: F) -> Result<T, Error>
-    where F: FnOnce(&str) -> Result<T, Error>
+    fn read_text_and_map<F, T>(&mut self, f: F) -> Result<T, MarketXmlError>
+    where
+        F: FnOnce(&str) -> Result<T, MarketXmlError>,
     {
         let mut text = String::new();
         loop {
-            match self.xml_reader.read_event(&mut self.buf)? {
+            match self.xml_reader.read_event(&mut self.buf).context(Xml)? {
                 Event::Text(tag_text) |
                 Event::CData(tag_text) => {
-                    let bytes = &tag_text.unescaped()?.into_owned();
+                    let bytes = &tag_text.unescaped().context(Xml)?.into_owned();
                     text.push_str(&String::from_utf8_lossy(&bytes).trim());
                 }
                 Event::End(_) => {
                     break;
                 }
-                Event::Eof => return Err(XmlError::UnexpectedEof("Text".to_string()).into()),
-                _ => return Err(XmlError::TextNotFound.into()),
+                Event::Eof => return Err(MarketXmlError::Xml {
+                    source: XmlError::UnexpectedEof("Text".to_string()),
+                }),
+                _ => return Err(MarketXmlError::Xml {
+                    source: XmlError::TextNotFound
+                }),
             }
         }
         f(&text)
+    }
+
+    fn parse_u64(s: &str) -> Result<u64, MarketXmlError> {
+        s.parse().context(ParseInt)
     }
 }
 
 
 #[cfg(test)]
 mod tests {
-    use failure::{Error, format_err};
-
     use std::io::BufReader;
+
+    use failure::{bail, Error};
 
     use crate::market_xml::{Category, Condition, Currency, DeliveryOption, Param};
     use super::{MarketXmlConfig, MarketXmlParser, ParsedItem};
@@ -644,9 +680,9 @@ mod tests {
             reader
         );
         let s = match parser.next().unwrap()? {
-            ParsedItem::Shop(o) => Ok(o),
-            _ => Err(format_err!("Expected shop"))
-        }?;
+            ParsedItem::Shop(shop) => shop,
+            _ => bail!("Expected shop"),
+        };
         assert_eq!(&s.name, "BestSeller");
         assert_eq!(&s.company, "Tne Best inc.");
         assert_eq!(&s.url, "http://best.seller.ru");
@@ -728,9 +764,9 @@ mod tests {
             reader
         );
         let o = match parser.next().unwrap()? {
-            ParsedItem::Offer(o) => Ok(o),
-            _ => Err(format_err!("Expected offer"))
-        }?;
+            ParsedItem::Offer(offer) => offer,
+            _ => bail!("Expected offer"),
+        };
         assert_eq!(&o.id, "9012");
         assert_eq!(o.bid, 80);
         assert_eq!(&o.name, "Мороженица Brand 3811");
@@ -774,9 +810,9 @@ mod tests {
         assert_eq!(&o.dimensions, "20.1/20.551/22.5");
 
         let s = match parser.next().unwrap()? {
-            ParsedItem::Shop(o) => Ok(o),
-            _ => Err(format_err!("Expected shop"))
-        }?;
+            ParsedItem::Shop(shop) => shop,
+            _ => bail!("Expected shop"),
+        };
         assert_eq!(&s.name, "");
 
         println!("{:?}", parser.next());

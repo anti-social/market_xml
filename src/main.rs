@@ -2,11 +2,11 @@ use bytes::BytesMut;
 
 use clap::Clap;
 
-use failure::{Error, format_err};
+use prost::{EncodeError, Message};
 
-use prost::Message;
+use snafu::{ResultExt, Snafu};
 
-use std::io::{BufReader, Write};
+use std::io::{self, BufReader, Write};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
@@ -26,18 +26,35 @@ struct Opts {
     xml_file: PathBuf,
 }
 
-fn main() -> Result<(), Error> {
+#[derive(Debug, Snafu)]
+enum CliError {
+    #[snafu(display("Invalid option: {}", msg))]
+    InvalidOpt { msg: String },
+    #[snafu(display("Cannot open an input file: {}", source))]
+    OpenInputFile { source: io::Error },
+    #[snafu(display("Cannot create an output directory: {}", source))]
+    CreateOutputDir { source: io::Error },
+    #[snafu(display("Cannot open an output file: {}", source))]
+    OpenOutputFile { source: io::Error },
+    #[snafu(display("Cannot write an output file: {}", source))]
+    WriteOutputFile { source: io::Error },
+    #[snafu(display("Error when encoding to protobuf: {}", source))]
+    ProtobufEncode { source: EncodeError },
+}
+
+fn main() -> Result<(), CliError> {
     let opts = Opts::parse();
     if opts.offers_chunk_size == 0 {
-        return Err(format_err!("offers-chunk must be greater than 0"));
+        return Err(CliError::InvalidOpt { msg: "offers-chunk must be greater than 0".to_string() });
     }
-    println!("opts: {:?}", opts);
 
-    let file_reader = BufReader::new(File::open(opts.xml_file.as_path())?);
+    let file_reader = BufReader::new(
+        File::open(opts.xml_file.as_path()).context(OpenInputFile)?
+    );
     let mut parser = MarketXmlParser::new(MarketXmlConfig::default(), file_reader);
 
     if !opts.output_dir.exists() {
-        create_dir_all(&opts.output_dir)?;
+        create_dir_all(&opts.output_dir).context(CreateOutputDir)?;
     }
 
     let mut buf = BytesMut::new();
@@ -54,7 +71,8 @@ fn main() -> Result<(), Error> {
             Ok(ParsedItem::Shop(shop)) => {
                 write_shop(&opts.output_dir, shop, &mut buf)?;
             }
-            Err(_) => {
+            Err(e) => {
+                eprintln!("{}", e);
                 total_offers += 1;
                 offers_with_errors += 1;
             },
@@ -82,13 +100,14 @@ fn main() -> Result<(), Error> {
 
 fn write_shop(
     out_dir: &Path, shop: market_xml::Shop, buf: &mut BytesMut
-) -> Result<PathBuf, Error> {
+) -> Result<PathBuf, CliError> {
     let mut shop_file_path = out_dir.to_path_buf();
     shop_file_path.push("shop.protobuf");
     let mut shop_file = OpenOptions::new().create_new(true).write(true)
-        .open(&shop_file_path)?;
-    shop.encode(buf)?;
-    shop_file.write_all(buf)?;
+        .open(&shop_file_path)
+        .context(OpenOutputFile)?;
+    shop.encode(buf).context(ProtobufEncode)?;
+    shop_file.write_all(buf).context(WriteOutputFile)?;
     buf.clear();
 
     Ok(shop_file_path)
@@ -99,13 +118,14 @@ fn write_offers_chunk(
     chunk_ix: u32,
     offers: &mut market_xml::Offers,
     buf: &mut BytesMut,
-) -> Result<PathBuf, Error> {
+) -> Result<PathBuf, CliError> {
     let mut offers_file_path = out_dir.to_path_buf();
     offers_file_path.push(format!("offers-{}.protobuf", chunk_ix));
     let mut offers_file = OpenOptions::new().create_new(true).write(true)
-        .open(&offers_file_path)?;
-    offers.encode(buf)?;
-    offers_file.write_all(buf)?;
+        .open(&offers_file_path)
+        .context(OpenOutputFile)?;
+    offers.encode(buf).context(ProtobufEncode)?;
+    offers_file.write_all(buf).context(WriteOutputFile)?;
     offers.clear();
     buf.clear();
 

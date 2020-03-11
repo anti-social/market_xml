@@ -9,11 +9,15 @@ edition = "2018"
 [dependencies]
 bytes = "0.5"
 clap = { git = "https://github.com/clap-rs/clap.git", rev = "bc738e1" }
-failure = "0.1"
-failure_derive = "0.1"
 prost = "0.6"
 prost-types = "0.6"
 quick-xml = "0.17"
+snafu = "0.6"
+snafu-derive = "0.6"
 
 [build-dependencies]
 prost-build = "0.6"
+
+[dev-dependencies]
+failure = "0.1"
+failure_derive = "0.1"
