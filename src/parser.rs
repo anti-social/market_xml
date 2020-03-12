@@ -6,11 +6,12 @@ use snafu::{ResultExt, Snafu};
 
 use std::collections::HashSet;
 use std::io::prelude::BufRead;
-use std::num::{ParseFloatError, ParseIntError};
-use std::str::ParseBoolError;
+use std::fmt::Display;
+use std::str::FromStr;
 
-use crate::market_xml::{Category, Condition, Currency, DeliveryOption, Offer, Param, Price, Shop};
-
+use crate::market_xml::{
+    Category, Condition, Currency, DeliveryOption, Offer, Param, Price, Shop,
+};
 
 #[derive(Debug, Snafu)]
 pub(crate) enum MarketXmlError {
@@ -19,29 +20,17 @@ pub(crate) enum MarketXmlError {
         source: XmlError,
         line: usize,
     },
-    #[snafu(display("Unexpected tag: {}", tag))]
+    #[snafu(display("Unexpected tag"))]
     UnexpectedTag {
         tag: String,
         line: usize,
     },
-    #[snafu(display("{}", source))]
-    ParseBool {
-        source: ParseBoolError,
+    #[snafu(display("Validation: {}", msg))]
+    Validation {
+        msg: String,
         line: usize,
         value: String,
-    },
-    #[snafu(display("{}", source))]
-    ParseFloat {
-        source: ParseFloatError,
-        line: usize,
-        value: String,
-    },
-    #[snafu(display("{}", source))]
-    ParseInt {
-        source: ParseIntError,
-        line: usize,
-        value: String,
-    },
+    }
 }
 
 impl MarketXmlError {
@@ -51,9 +40,7 @@ impl MarketXmlError {
         match *self {
             Xml { line, .. } => line,
             UnexpectedTag { line, .. } => line,
-            ParseBool { line, .. } => line,
-            ParseFloat { line, .. } => line,
-            ParseInt { line, .. } => line,
+            Validation { line, .. } => line,
         }
     }
 
@@ -63,9 +50,7 @@ impl MarketXmlError {
         match self {
             Xml { .. } => None,
             UnexpectedTag { tag, .. } => Some(tag),
-            ParseBool { value, .. } => Some(value),
-            ParseFloat { value, .. } => Some(value),
-            ParseInt { value, .. } => Some(value),
+            Validation { value, .. } => Some(value)
         }
     }
 }
@@ -351,10 +336,10 @@ impl<B: BufRead> MarketXmlParser<B> {
             let value = String::from_utf8_lossy(&attr.value);
             match attr.key {
                 b"id" => {
-                    category.id = self.parse_u64(value.as_ref())?;
+                    category.id = self.parse_value(value.as_ref())?;
                 }
                 b"parentId" => {
-                    category.parent_id = self.parse_u64(value.as_ref())?;
+                    category.parent_id = self.parse_value(value.as_ref())?;
                 }
                 _ => {}
             }
@@ -408,16 +393,21 @@ impl<B: BufRead> MarketXmlParser<B> {
                     offer.r#type = String::from_utf8_lossy(&attr.value).to_string();
                 }
                 b"bid" => {
-                    offer.bid = self.parse_u32(&String::from_utf8_lossy(&attr.value))?
+                    offer.bid = self.parse_value(&String::from_utf8_lossy(&attr.value))?
                 }
                 b"cbid" => {
-                    offer.cbid = self.parse_u32(&String::from_utf8_lossy(&attr.value))?
+                    offer.cbid = self.parse_value(&String::from_utf8_lossy(&attr.value))?
                 }
                 b"available" => {
                     offer.available = match attr.value.as_ref() {
-                        b"" | b"false" | b"0" => false,
-                        b"true" | b"1" => true,
-                        _ => false,
+                        b"false" | b"0" => Some(false),
+                        b"true" | b"1" => Some(true),
+                        b"" => None,
+                        _ => return Err(MarketXmlError::Validation {
+                            msg: "parse bool".to_string(),
+                            line: self.current_line(),
+                            value: String::from_utf8_lossy(&attr.value).to_string(),
+                        }),
                     }
                 }
                 _ => {}
@@ -479,7 +469,7 @@ impl<B: BufRead> MarketXmlParser<B> {
                 offer.currency_id = self.read_text()?;
             }
             b"categoryId" => {
-                offer.category_id = self.read_u64()?;
+                offer.category_id = self.read_value()?;
             }
             b"description" => {
                 offer.description = self.read_text()?;
@@ -488,22 +478,25 @@ impl<B: BufRead> MarketXmlParser<B> {
                 offer.sales_notes = self.read_text()?;
             }
             b"delivery" => {
-                offer.delivery = self.read_bool()?;
+                offer.delivery = self.read_opt()?;
             }
             b"pickup" => {
-                offer.pickup = self.read_bool()?;
+                offer.pickup = self.read_opt()?;
             }
             b"store" => {
-                offer.store = self.read_bool()?;
+                offer.store = self.read_opt()?;
             }
             b"downloadable" => {
-                offer.downloadable = self.read_bool()?;
+                offer.downloadable = self.read_value()?;
             }
             b"enable_auto_discounts" => {
-                offer.enable_auto_discounts = self.read_bool()?;
+                offer.enable_auto_discounts = self.read_value()?;
+            }
+            b"min_quantity" => {
+                offer.min_quantity = self.read_opt()?;
             }
             b"manufacturer_warranty" => {
-                offer.manufacturer_warranty = self.read_bool()?;
+                offer.manufacturer_warranty = self.read_value()?;
             }
             b"barcode" => {
                 offer.barcodes.push(self.read_text()?);
@@ -525,7 +518,7 @@ impl<B: BufRead> MarketXmlParser<B> {
                 offer.country_of_origin = self.read_text()?;
             }
             b"weight" => {
-                offer.weight = self.read_f32()?;
+                offer.weight = self.read_value()?;
             }
             b"dimensions" => {
                 offer.dimensions = self.read_text()?;
@@ -576,13 +569,13 @@ impl<B: BufRead> MarketXmlParser<B> {
             let attr = attr_res.context(self.xml_err_ctx())?;
             match attr.key {
                 b"cost" => {
-                    option.cost = self.parse_u32(&String::from_utf8_lossy(&attr.value))?;
+                    option.cost = self.parse_value(&String::from_utf8_lossy(&attr.value))?;
                 }
                 b"days" => {
                     option.days = String::from_utf8_lossy(&attr.value).to_string();
                 }
                 b"order-before" => {
-                    option.order_before = self.parse_u32(&String::from_utf8_lossy(&attr.value))?;
+                    option.order_before = self.parse_opt(&String::from_utf8_lossy(&attr.value))?;
                 }
                 _ => {}
             }
@@ -592,7 +585,7 @@ impl<B: BufRead> MarketXmlParser<B> {
 
     fn parse_price(&mut self, tag_attrs: &mut Attributes) -> Result<Price, MarketXmlError> {
         let mut price = Price::default();
-        price.price = self.read_f32()?;
+        price.price = self.read_value()?;
         for attr_res in tag_attrs {
             let attr = attr_res.context(self.xml_err_ctx())?;
             if attr.key == b"from" && attr.value.as_ref() == b"true" {
@@ -670,37 +663,76 @@ impl<B: BufRead> MarketXmlParser<B> {
         self.read_text_and_parse(|s, _| Ok(s.to_string()))
     }
 
-    fn read_bool(&mut self) -> Result<bool, MarketXmlError> {
+    fn read_value<T>(&mut self) -> Result<T, MarketXmlError>
+    where
+        T: FromStr,
+        T::Err: Display,
+    {
         self.read_text_and_parse(|s, line| {
-            s.parse().context(ParseBool { line, value: s.to_string() })
+            s.parse().map_err(|e| {
+                MarketXmlError::Validation {
+                    msg: format!("{}", e),
+                    line,
+                    value: s.to_string(),
+                }
+            })
         })
     }
 
-    fn read_f64(&mut self) -> Result<f64, MarketXmlError> {
+    fn read_opt<T>(&mut self) -> Result<Option<T>, MarketXmlError>
+    where
+        T: FromStr,
+        T::Err: Display,
+    {
         self.read_text_and_parse(|s, line| {
-            s.parse().context(ParseFloat { line, value: s.to_string() })
+            if s == "" {
+                Ok(None)
+            } else {
+                Some(
+                    s.parse().map_err(|e| {
+                        MarketXmlError::Validation {
+                            msg: format!("{}", e),
+                            line,
+                            value: s.to_string(),
+                        }
+                    })
+                ).transpose()
+            }
         })
     }
 
-    fn read_f32(&mut self) -> Result<f32, MarketXmlError> {
-        self.read_text_and_parse(|s, line| {
-            s.parse().context(ParseFloat { line, value: s.to_string() })
+    fn parse_value<T>(&self, s: &str) -> Result<T, MarketXmlError>
+    where
+        T: FromStr,
+        T::Err: Display,
+    {
+        s.parse().map_err(|e| {
+            MarketXmlError::Validation {
+                msg: format!("{}", e),
+                line: self.current_line(),
+                value: s.to_string(),
+            }
         })
-
     }
 
-    fn read_u64(&mut self) -> Result<u64, MarketXmlError> {
-        self.read_text_and_parse(|s, line| {
-            s.parse().context(ParseInt { line, value: s.to_string() })
-        })
-    }
-
-    fn parse_u64(&self, s: &str) -> Result<u64, MarketXmlError> {
-        s.parse().context(ParseInt { line: self.current_line(), value: s.to_string() })
-    }
-
-    fn parse_u32(&self, s: &str) -> Result<u32, MarketXmlError> {
-        s.parse().context(ParseInt { line: self.current_line(), value: s.to_string() })
+    fn parse_opt<T>(&self, s: &str) -> Result<Option<T>, MarketXmlError>
+    where
+        T: FromStr,
+        T::Err: Display,
+    {
+        if s == "" {
+            Ok(None)
+        } else {
+            Some(
+                s.parse().map_err(|e| {
+                    MarketXmlError::Validation {
+                        msg: format!("{}", e),
+                        line: self.current_line(),
+                        value: s.to_string(),
+                    }
+                })
+            ).transpose()
+        }
     }
 
     fn read_text_and_parse<F, T>(&mut self, f: F) -> Result<T, MarketXmlError>
@@ -769,7 +801,7 @@ mod tests {
             MarketXmlConfig::default(),
             reader
         );
-        let s = match parser.next_item().unwrap()? {
+        let s = match parser.next_item()? {
             ParsedItem::Shop(shop) => shop,
             _ => bail!("Expected shop"),
         };
@@ -794,7 +826,7 @@ mod tests {
         assert_eq!(
             s.delivery_options,
             vec!(
-                DeliveryOption { cost: 200, days: "1".to_string(), order_before: 0 }
+                DeliveryOption { cost: 200, days: "1".to_string(), order_before: None }
             )
         );
 
@@ -854,7 +886,7 @@ mod tests {
             MarketXmlConfig::default(),
             reader
         );
-        let o = match parser.next_item().unwrap()? {
+        let o = match parser.next_item()? {
             ParsedItem::Offer(offer) => offer,
             _ => bail!("Expected offer"),
         };
@@ -871,21 +903,21 @@ mod tests {
         assert_eq!(&o.currency_id, "RUR");
         assert_eq!(o.category_id, 101);
         assert_eq!(&o.picture, "http://best.seller.ru/img/model_12345.jpg");
-        assert_eq!(o.delivery, true);
-        assert_eq!(o.pickup, true);
+        assert_eq!(o.delivery, Some(true));
+        assert_eq!(o.pickup, Some(true));
         assert_eq!(
             o.delivery_options,
             vec!(
-                DeliveryOption { cost: 300, days: "1".to_string(), order_before: 18 }
+                DeliveryOption { cost: 300, days: "1".to_string(), order_before: Some(18) }
             )
         );
         assert_eq!(
             o.pickup_options,
             vec!(
-                DeliveryOption { cost: 300, days: "1-3".to_string(), order_before: 0 }
+                DeliveryOption { cost: 300, days: "1-3".to_string(), order_before: None }
             )
         );
-        assert_eq!(o.store, true);
+        assert_eq!(o.store, Some(true));
         assert_eq!(
             &o.description,
             r#"<h3>Мороженица Brand 3811</h3>
@@ -901,15 +933,14 @@ mod tests {
         assert_eq!(o.weight, 3.6);
         assert_eq!(&o.dimensions, "20.1/20.551/22.5");
 
-        let s = match parser.next_item().unwrap()? {
+        let s = match parser.next_item()? {
             ParsedItem::Shop(shop) => shop,
             _ => bail!("Expected shop"),
         };
         assert_eq!(parser.current_line(), 44);
         assert_eq!(&s.name, "");
 
-        println!("{:?}", parser.next_item());
-        assert!(parser.next_item().is_none());
+        assert_eq!(parser.next_item()?, ParsedItem::Eof);
 
         Ok(())
     }

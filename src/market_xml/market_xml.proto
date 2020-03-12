@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package market_xml;
 
+import "google/protobuf/wrappers.proto";
+
 message Shop {
     // required
     string name = 1;
@@ -38,7 +40,7 @@ message Category {
 message DeliveryOption {
     uint32 cost = 1;
     string days = 2;
-    uint32 order_before = 3; // default 13
+    google.protobuf.UInt32Value order_before = 3;
 }
 
 message Offers {
@@ -48,7 +50,7 @@ message Offers {
 message Offer {
     string id = 1;
     string type = 2;
-    bool available = 3;  // default true
+    google.protobuf.BoolValue available = 3;
 
     string name = 4;
     uint64 category_id = 5;
@@ -64,28 +66,27 @@ message Offer {
     uint32 cbid = 15;
     bool enable_auto_discounts = 16;
     string picture = 17;
-    bool delivery = 18;  // default true
-    bool pickup = 19;  // default true
+    google.protobuf.BoolValue delivery = 18;
+    google.protobuf.BoolValue pickup = 19;
     repeated DeliveryOption delivery_options = 20;
     repeated DeliveryOption pickup_options = 21;
-    string local_delivery_days = 22;  // TODO: make it oneof
-    bool store = 23;  // default true
-    string description = 24;
-    string sales_notes = 25;
-    uint32 min_quantity = 26;  // default 1
-    bool manufacturer_warranty = 27;
-    string country_of_origin = 28;
-    bool adult = 29;
-    repeated string barcodes = 30;
-    repeated Param params = 31;
-    Condition condition = 32;
-    string credit_template_id = 33;
-    string expiry = 34;
-    float weight = 35;
-    string dimensions = 36;
-    bool downloadable = 37;
-    Age age = 38;
-    uint32 group_id = 39;
+    google.protobuf.BoolValue store = 22;
+    string description = 23;
+    string sales_notes = 24;
+    google.protobuf.UInt32Value min_quantity = 25;
+    bool manufacturer_warranty = 26;
+    string country_of_origin = 27;
+    bool adult = 28;
+    repeated string barcodes = 29;
+    repeated Param params = 30;
+    Condition condition = 31;
+    string credit_template_id = 32;
+    string expiry = 33;
+    float weight = 34;
+    string dimensions = 35;
+    bool downloadable = 36;
+    Age age = 37;
+    uint32 group_id = 38;
 }
 
 message Price {

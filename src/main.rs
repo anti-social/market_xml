@@ -25,6 +25,10 @@ pub(crate) mod market_xml {
     include!(concat!(env!("OUT_DIR"), "/market_xml.rs"));
 }
 
+mod google {
+    include!(concat!(env!("OUT_DIR"), "/google.protobuf.rs"));
+}
+
 #[derive(Clap, Debug)]
 struct Opts {
     #[clap(long = "offers-chunk", default_value = "50000")]
