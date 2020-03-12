@@ -98,6 +98,10 @@ message Param {
     string name = 1;
     string unit = 2;
     string value = 3;
+
+    // extension
+    string id = 4;
+    string value_id = 5;
 }
 
 message Condition {

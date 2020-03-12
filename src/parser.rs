@@ -600,12 +600,19 @@ impl<B: BufRead> MarketXmlParser<B> {
         param.value = self.read_text()?;
         for attr_res in tag_attrs {
             let attr = attr_res.context(self.xml_err_ctx())?;
+            let value = String::from_utf8_lossy(attr.value.as_ref()).to_string();
             match attr.key {
                 b"name" => {
-                    param.name = String::from_utf8_lossy(attr.value.as_ref()).to_string();
+                    param.name = value;
                 }
                 b"unit" => {
-                    param.unit = String::from_utf8_lossy(attr.value.as_ref()).to_string();
+                    param.unit = value;
+                }
+                b"id" => {
+                    param.id = value;
+                }
+                b"valueid" => {
+                    param.value_id = value;
                 }
                 _ => {}
             }
@@ -927,7 +934,17 @@ mod tests {
         assert_eq!(o.manufacturer_warranty, true);
         assert_eq!(&o.country_of_origin, "Китай");
         assert_eq!(o.barcodes, vec!("4601546021298".to_string()));
-        assert_eq!(o.params, vec!(Param { name: "Цвет".to_string(), unit: "".to_string(), value: "белый".to_string() }));
+        assert_eq!(
+            o.params,
+            vec!(
+                Param {
+                    name: "Цвет".to_string(),
+                    unit: "".to_string(),
+                    value: "белый".to_string(),
+                    ..Default::default()
+                }
+            )
+        );
         assert_eq!(o.condition, Some(Condition { r#type: "likenew".to_string(), reason: "Повреждена упаковка".to_string() }));
         assert_eq!(&o.credit_template_id, "20034");
         assert_eq!(o.weight, 3.6);
