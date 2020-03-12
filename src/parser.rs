@@ -105,6 +105,7 @@ enum State {
 pub(crate) enum ParsedItem {
     Offer(Offer),
     Shop(Shop),
+    Eof,
 }
 
 impl<B: BufRead> MarketXmlParser<B> {
@@ -147,45 +148,33 @@ impl<B: BufRead> MarketXmlParser<B> {
         }
     }
 
-    pub(crate) fn next_item(&mut self) -> Option<Result<ParsedItem, MarketXmlError>> {
+    pub(crate) fn next_item(&mut self) -> Result<ParsedItem, MarketXmlError> {
         loop {
             match self.state {
                 State::Begin => {
-                    match self.begin() {
-                        Ok(state) => self.state = state,
-                        Err(e) => return Some(Err(e)),
-                    }
+                    self.state = self.begin()?;
                 }
                 State::YmlCatalog => {
-                    match self.parse_yml_catalog() {
-                        Ok(state) => self.state = state,
-                        Err(e) => return Some(Err(e)),
-                    }
+                    self.state = self.parse_yml_catalog()?;
                 }
                 State::Shop => {
-                    match self.parse_shop() {
-                        Ok(state) => {
-                            self.state = state;
-                            if state == State::YmlCatalog {
-                                return Some(Ok(ParsedItem::Shop(self.shop.clone())));
-                            }
-                        }
-                        Err(e) => return Some(Err(e)),
+                    self.state = self.parse_shop()?;
+                    if self.state == State::YmlCatalog {
+                        return Ok(ParsedItem::Shop(self.shop.clone()));
                     }
                 }
                 State::Offers => {
-                    match self.parse_offers() {
-                        Ok(Some(offer)) => {
-                            return Some(Ok(ParsedItem::Offer(offer)));
+                    match self.parse_offers()? {
+                        Some(offer) => {
+                            return Ok(ParsedItem::Offer(offer));
                         }
-                        Ok(None) => {
+                        None => {
                             self.state = State::Shop;
                         }
-                        Err(e) => return Some(Err(e)),
                     }
                 }
                 State::End => {
-                    return None;
+                    return Ok(ParsedItem::Eof);
                 }
             }
         }

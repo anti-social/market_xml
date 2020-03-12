@@ -89,8 +89,8 @@ fn main() -> Result<(), CliError> {
     let mut chunk_ix = 0;
     let mut total_offers = 0;
     let mut offers_with_errors = 0;
-    while let Some(item_res) = parser.next_item() {
-        match item_res {
+    loop {
+        match parser.next_item() {
             Ok(ParsedItem::Offer(order)) => {
                 offers.offers.push(order);
                 total_offers += 1;
@@ -99,6 +99,9 @@ fn main() -> Result<(), CliError> {
                 if !opts.dry_run {
                     write_message(&opts.output_dir, "shop.protobuf", &shop, &mut buf)?;
                 }
+            }
+            Ok(ParsedItem::Eof) => {
+                break;
             }
             Err(e) => {
                 if let MarketXmlError::Xml {..} = e {
