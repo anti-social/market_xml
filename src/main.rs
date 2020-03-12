@@ -1,13 +1,19 @@
+use byteorder::{LittleEndian, ReadBytesExt};
+
 use bytes::BytesMut;
 
 use clap::Clap;
+
+use flate2::bufread::GzDecoder;
 
 use prost::{EncodeError, Message};
 
 use snafu::{ResultExt, Snafu};
 
-use std::io::{self, BufReader, Write};
-use std::fs::{create_dir_all, File, OpenOptions};
+use std::io::{self, BufReader, Write, SeekFrom};
+use std::io::prelude::*;
+use std::ffi::OsStr;
+use std::fs::{self, create_dir_all, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 mod parser;
@@ -50,9 +56,8 @@ fn main() -> Result<(), CliError> {
         return Err(CliError::InvalidOpt { msg: "offers-chunk must be greater than 0".to_string() });
     }
 
-    let file_reader = BufReader::new(
-        File::open(opts.xml_file.as_path()).context(OpenInputFile)?
-    );
+    let (file_reader, file_size) = open_market_xml_file(opts.xml_file.as_path())
+        .context(OpenInputFile)?;
     let mut parser = MarketXmlParser::new(MarketXmlConfig::default(), file_reader);
 
     if !opts.output_dir.exists() {
@@ -111,6 +116,30 @@ fn main() -> Result<(), CliError> {
     println!("Offers with errors: {}", offers_with_errors);
 
     Ok(())
+}
+
+fn open_market_xml_file(file_path: &Path) -> Result<(Box<dyn BufRead>, u64), io::Error> {
+    let mut file = File::open(file_path)?;
+    match file_path.extension() {
+        Some(ext) if ext == OsStr::new("gz") => {
+            let file_size = get_gzip_file_uncompressed_size(&mut file)? as u64;
+            let reader = BufReader::new(GzDecoder::new(BufReader::new(file)));
+            Ok((Box::new(reader), file_size))
+        }
+        _ => {
+            let file_size = fs::metadata(file_path)?.len();
+            let reader = BufReader::new(file);
+            Ok((Box::new(reader), file_size))
+        }
+    }
+}
+
+fn get_gzip_file_uncompressed_size(file: &mut File) -> Result<u32, io::Error> {
+    let orig_position = file.seek(SeekFrom::Current(0))?;
+    file.seek(SeekFrom::End(-4))?;
+    let size = file.read_u32::<LittleEndian>()?;
+    file.seek(SeekFrom::Start(orig_position))?;
+    return Ok(size);
 }
 
 fn write_message<M: Message>(
