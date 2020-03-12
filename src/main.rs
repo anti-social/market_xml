@@ -33,6 +33,8 @@ struct Opts {
     output_dir: PathBuf,
     #[clap(long = "no-progress")]
     no_progress: bool,
+    #[clap(long = "dry-run")]
+    dry_run: bool,
     xml_file: PathBuf,
 }
 
@@ -42,14 +44,14 @@ enum CliError {
     InvalidOpt { msg: String },
     #[snafu(display("Xml parse error: {}", msg))]
     ParseXml { msg: String },
-    #[snafu(display("Cannot open an input file: {}", source))]
-    OpenInputFile { source: io::Error },
-    #[snafu(display("Cannot create an output directory: {}", source))]
-    CreateOutputDir { source: io::Error },
-    #[snafu(display("Cannot open an output file: {}", source))]
-    OpenOutputFile { source: io::Error },
-    #[snafu(display("Cannot write an output file: {}", source))]
-    WriteOutputFile { source: io::Error },
+    #[snafu(display("Cannot open an input file {:?}: {}", path, source))]
+    OpenInputFile { source: io::Error, path: PathBuf },
+    #[snafu(display("Cannot create an output directory {:?}: {}", path, source))]
+    CreateOutputDir { source: io::Error, path: PathBuf },
+    #[snafu(display("Cannot open an output file {:?}: {}", path, source))]
+    OpenOutputFile { source: io::Error, path: PathBuf },
+    #[snafu(display("Cannot write an output file {:?}: {}", path, source))]
+    WriteOutputFile { source: io::Error, path: PathBuf },
     #[snafu(display("Error when encoding to protobuf: {}", source))]
     ProtobufEncode { source: EncodeError },
 }
@@ -61,11 +63,12 @@ fn main() -> Result<(), CliError> {
     }
 
     let (file_reader, file_size) = open_market_xml_file(opts.xml_file.as_path())
-        .context(OpenInputFile)?;
+        .context(OpenInputFile { path: opts.xml_file })?;
     let mut parser = MarketXmlParser::new(MarketXmlConfig::default(), file_reader);
 
     if !opts.output_dir.exists() {
-        create_dir_all(&opts.output_dir).context(CreateOutputDir)?;
+        create_dir_all(&opts.output_dir)
+            .context(CreateOutputDir { path: opts.output_dir.clone() })?;
     }
 
     let progressbar = if opts.no_progress {
@@ -93,7 +96,9 @@ fn main() -> Result<(), CliError> {
                 total_offers += 1;
             }
             Ok(ParsedItem::Shop(shop)) => {
-                write_message(&opts.output_dir, "shop.protobuf", &shop, &mut buf)?;
+                if !opts.dry_run {
+                    write_message(&opts.output_dir, "shop.protobuf", &shop, &mut buf)?;
+                }
             }
             Err(e) => {
                 if let MarketXmlError::Xml {..} = e {
@@ -110,9 +115,11 @@ fn main() -> Result<(), CliError> {
         }
 
         if offers.offers.len() as u32 >= opts.offers_chunk_size {
-            write_message(
-                &opts.output_dir, &format!("offers-{}.protobuf", chunk_ix), &offers, &mut buf
-            )?;
+            if !opts.dry_run {
+                write_message(
+                    &opts.output_dir, &format!("offers-{}.protobuf", chunk_ix), &offers, &mut buf
+                )?;
+            }
             offers.clear();
             chunk_ix += 1;
         }
@@ -125,13 +132,13 @@ fn main() -> Result<(), CliError> {
         });
     }
 
-    if !offers.offers.is_empty() {
+    if !offers.offers.is_empty() && !opts.dry_run {
         write_message(
             &opts.output_dir, &format!("offers-{}.protobuf", chunk_ix), &offers, &mut buf
         )?;
     }
 
-    if !errors.errors.is_empty() {
+    if !errors.errors.is_empty() && !opts.dry_run {
         write_message(&opts.output_dir, "errors.protobuf", &errors, &mut buf)?;
     }
 
@@ -174,9 +181,10 @@ fn write_message<M: Message>(
     file_path.push(file_name);
     let mut file = OpenOptions::new().create_new(true).write(true)
         .open(&file_path)
-        .context(OpenOutputFile)?;
+        .context(OpenOutputFile { path: file_path.clone() })?;
     msg.encode(buf).context(ProtobufEncode)?;
-    file.write_all(buf).context(WriteOutputFile)?;
+    file.write_all(buf)
+        .context(WriteOutputFile { path: file_path.clone() })?;
     buf.clear();
 
     Ok(file_path)
