@@ -124,6 +124,10 @@ impl<B: BufRead> MarketXmlParser<B> {
         self.xml_reader.line_number()
     }
 
+    pub(crate) fn buffer_position(&self) -> usize {
+        self.xml_reader.buffer_position()
+    }
+
     fn xml_err_ctx(&self) -> Xml<usize> {
         Xml {
             line: self.xml_reader.line_number(),

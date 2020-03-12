@@ -6,6 +6,8 @@ use clap::Clap;
 
 use flate2::bufread::GzDecoder;
 
+use indicatif::{ProgressBar, ProgressStyle};
+
 use prost::{EncodeError, Message};
 
 use snafu::{ResultExt, Snafu};
@@ -29,6 +31,8 @@ struct Opts {
     offers_chunk_size: u32,
     #[clap(long = "output-dir", short = "o")]
     output_dir: PathBuf,
+    #[clap(long = "no-progress")]
+    no_progress: bool,
     xml_file: PathBuf,
 }
 
@@ -63,6 +67,18 @@ fn main() -> Result<(), CliError> {
     if !opts.output_dir.exists() {
         create_dir_all(&opts.output_dir).context(CreateOutputDir)?;
     }
+
+    let progressbar = if opts.no_progress {
+        None
+    } else {
+        let pb = ProgressBar::new(file_size);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) parsing file")
+                .progress_chars("#>-")
+        );
+        Some(pb)
+    };
 
     let mut buf = BytesMut::new();
     let mut offers = market_xml::Offers::default();
@@ -100,6 +116,13 @@ fn main() -> Result<(), CliError> {
             offers.clear();
             chunk_ix += 1;
         }
+
+        progressbar.as_ref().map(|pb| {
+            let cur_pos = parser.buffer_position() as u64;
+            if cur_pos - pb.position() > file_size / 100 {
+                pb.set_position(cur_pos);
+            }
+        });
     }
 
     if !offers.offers.is_empty() {
@@ -111,6 +134,8 @@ fn main() -> Result<(), CliError> {
     if !errors.errors.is_empty() {
         write_message(&opts.output_dir, "errors.protobuf", &errors, &mut buf)?;
     }
+
+    progressbar.map(|pb| pb.finish());
 
     println!("Total offers: {}", total_offers);
     println!("Offers with errors: {}", offers_with_errors);
