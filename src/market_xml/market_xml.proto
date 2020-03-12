@@ -89,6 +89,10 @@ message Offer {
     uint32 group_id = 38;
 }
 
+message AvailableOfferIds {
+    repeated string offer_ids = 1;
+}
+
 message Price {
     float price = 1;
     bool from = 2;

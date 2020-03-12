@@ -25,10 +25,6 @@ pub(crate) mod market_xml {
     include!(concat!(env!("OUT_DIR"), "/market_xml.rs"));
 }
 
-mod google {
-    include!(concat!(env!("OUT_DIR"), "/google.protobuf.rs"));
-}
-
 #[derive(Clap, Debug)]
 struct Opts {
     #[clap(long = "offers-chunk", default_value = "50000")]
@@ -90,13 +86,17 @@ fn main() -> Result<(), CliError> {
     let mut buf = BytesMut::new();
     let mut offers = market_xml::Offers::default();
     let mut errors = market_xml::Errors::default();
+    let mut available_offer_ids = market_xml::AvailableOfferIds::default();
     let mut chunk_ix = 0;
     let mut total_offers = 0;
     let mut offers_with_errors = 0;
     loop {
         match parser.next_item() {
-            Ok(ParsedItem::Offer(order)) => {
-                offers.offers.push(order);
+            Ok(ParsedItem::Offer(offer)) => {
+                if offer.available.unwrap_or(true) {
+                    available_offer_ids.offer_ids.push(offer.id.clone());
+                }
+                offers.offers.push(offer);
                 total_offers += 1;
             }
             Ok(ParsedItem::Shop(shop)) => {
@@ -145,8 +145,19 @@ fn main() -> Result<(), CliError> {
         )?;
     }
 
+    if !available_offer_ids.offer_ids.is_empty() && !opts.dry_run {
+        write_message(
+            &opts.output_dir,
+            &format!("available-offer-ids.protobuf"),
+            &available_offer_ids,
+            &mut buf
+        )?;
+    }
+
     if !errors.errors.is_empty() && !opts.dry_run {
-        write_message(&opts.output_dir, "errors.protobuf", &errors, &mut buf)?;
+        write_message(
+            &opts.output_dir, "errors.protobuf", &errors, &mut buf
+        )?;
     }
 
     progressbar.map(|pb| pb.finish());
