@@ -11,7 +11,7 @@ use std::fs::{create_dir_all, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 mod parser;
-use parser::{MarketXmlConfig, MarketXmlParser, ParsedItem};
+use parser::{MarketXmlConfig, MarketXmlError, MarketXmlParser, ParsedItem};
 
 pub(crate) mod market_xml {
     include!(concat!(env!("OUT_DIR"), "/market_xml.rs"));
@@ -30,6 +30,8 @@ struct Opts {
 enum CliError {
     #[snafu(display("Invalid option: {}", msg))]
     InvalidOpt { msg: String },
+    #[snafu(display("Xml parse error: {}", msg))]
+    ParseXml { msg: String },
     #[snafu(display("Cannot open an input file: {}", source))]
     OpenInputFile { source: io::Error },
     #[snafu(display("Cannot create an output directory: {}", source))]
@@ -59,37 +61,50 @@ fn main() -> Result<(), CliError> {
 
     let mut buf = BytesMut::new();
     let mut offers = market_xml::Offers::default();
+    let mut errors = market_xml::Errors::default();
     let mut chunk_ix = 0;
     let mut total_offers = 0;
     let mut offers_with_errors = 0;
-    for item_res in parser {
+    while let Some(item_res) = parser.next_item() {
         match item_res {
             Ok(ParsedItem::Offer(order)) => {
                 offers.offers.push(order);
                 total_offers += 1;
             }
             Ok(ParsedItem::Shop(shop)) => {
-                write_shop(&opts.output_dir, shop, &mut buf)?;
+                write_message(&opts.output_dir, "shop.protobuf", &shop, &mut buf)?;
             }
             Err(e) => {
-                eprintln!("{}", e);
+                if let MarketXmlError::Xml {..} = e {
+                    return Err(CliError::ParseXml { msg: format!("{}", e) });
+                }
+                errors.errors.push(market_xml::Error {
+                    line: e.line() as u64,
+                    message: format!("{}", e),
+                    value: e.value().map(|v| v.to_string()).unwrap_or("".to_string()),
+                });
                 total_offers += 1;
                 offers_with_errors += 1;
             },
         }
 
         if offers.offers.len() as u32 >= opts.offers_chunk_size {
-            write_offers_chunk(&opts.output_dir, chunk_ix, &mut offers, &mut buf)?;
+            write_message(
+                &opts.output_dir, &format!("offers-{}.protobuf", chunk_ix), &offers, &mut buf
+            )?;
+            offers.clear();
             chunk_ix += 1;
         }
-
-//        if total_offers % 1000 == 0 {
-//            println!("{}", total_offers);
-//        }
     }
 
     if !offers.offers.is_empty() {
-        write_offers_chunk(&opts.output_dir, chunk_ix, &mut offers, &mut buf)?;
+        write_message(
+            &opts.output_dir, &format!("offers-{}.protobuf", chunk_ix), &offers, &mut buf
+        )?;
+    }
+
+    if !errors.errors.is_empty() {
+        write_message(&opts.output_dir, "errors.protobuf", &errors, &mut buf)?;
     }
 
     println!("Total offers: {}", total_offers);
@@ -98,36 +113,17 @@ fn main() -> Result<(), CliError> {
     Ok(())
 }
 
-fn write_shop(
-    out_dir: &Path, shop: market_xml::Shop, buf: &mut BytesMut
+fn write_message<M: Message>(
+    out_dir: &Path, file_name: &str, msg: &M, buf: &mut BytesMut
 ) -> Result<PathBuf, CliError> {
-    let mut shop_file_path = out_dir.to_path_buf();
-    shop_file_path.push("shop.protobuf");
-    let mut shop_file = OpenOptions::new().create_new(true).write(true)
-        .open(&shop_file_path)
+    let mut file_path = out_dir.to_path_buf();
+    file_path.push(file_name);
+    let mut file = OpenOptions::new().create_new(true).write(true)
+        .open(&file_path)
         .context(OpenOutputFile)?;
-    shop.encode(buf).context(ProtobufEncode)?;
-    shop_file.write_all(buf).context(WriteOutputFile)?;
+    msg.encode(buf).context(ProtobufEncode)?;
+    file.write_all(buf).context(WriteOutputFile)?;
     buf.clear();
 
-    Ok(shop_file_path)
-}
-
-fn write_offers_chunk(
-    out_dir: &Path,
-    chunk_ix: u32,
-    offers: &mut market_xml::Offers,
-    buf: &mut BytesMut,
-) -> Result<PathBuf, CliError> {
-    let mut offers_file_path = out_dir.to_path_buf();
-    offers_file_path.push(format!("offers-{}.protobuf", chunk_ix));
-    let mut offers_file = OpenOptions::new().create_new(true).write(true)
-        .open(&offers_file_path)
-        .context(OpenOutputFile)?;
-    offers.encode(buf).context(ProtobufEncode)?;
-    offers_file.write_all(buf).context(WriteOutputFile)?;
-    offers.clear();
-    buf.clear();
-
-    Ok(offers_file_path)
+    Ok(file_path)
 }
