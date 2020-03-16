@@ -35,6 +35,8 @@ struct Opts {
     no_progress: bool,
     #[clap(long = "dry-run")]
     dry_run: bool,
+    #[clap(long = "verbose", short = "v")]
+    verbose: bool,
     xml_file: PathBuf,
 }
 
@@ -110,6 +112,13 @@ fn main() -> Result<(), CliError> {
             Err(e) => {
                 if let MarketXmlError::Xml {..} = e {
                     return Err(CliError::ParseXml { msg: format!("{}", e) });
+                }
+                if opts.verbose {
+                    if let Some(err_value) = e.value() {
+                        eprintln!("Line {}: {}: {}", e.line(), e, err_value);
+                    } else {
+                        eprintln!("Line {}: {}", e.line(), e);
+                    }
                 }
                 errors.errors.push(market_xml::Error {
                     line: e.line() as u64,

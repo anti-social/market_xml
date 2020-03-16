@@ -25,7 +25,7 @@ pub(crate) enum MarketXmlError {
         tag: String,
         line: usize,
     },
-    #[snafu(display("Validation: {}", msg))]
+    #[snafu(display("{}", msg))]
     Validation {
         msg: String,
         line: usize,
