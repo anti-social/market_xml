@@ -7,7 +7,7 @@ use snafu::{ResultExt, Snafu};
 use std::collections::HashSet;
 use std::io::prelude::BufRead;
 use std::fmt::Display;
-use std::str::FromStr;
+use std::str::{self, FromStr};
 
 use crate::market_xml::{
     Category, Condition, Currency, DeliveryOption, Offer, Param, Price, Shop,
@@ -26,6 +26,12 @@ pub(crate) enum MarketXmlError {
         line: usize,
     },
     #[snafu(display("{}", msg))]
+    InvalidUtf8 {
+        msg: String,
+        line: usize,
+        value: String,
+    },
+    #[snafu(display("{}", msg))]
     Validation {
         msg: String,
         line: usize,
@@ -40,6 +46,7 @@ impl MarketXmlError {
         match *self {
             Xml { line, .. } => line,
             UnexpectedTag { line, .. } => line,
+            InvalidUtf8 { line, .. } => line,
             Validation { line, .. } => line,
         }
     }
@@ -50,6 +57,7 @@ impl MarketXmlError {
         match self {
             Xml { .. } => None,
             UnexpectedTag { tag, .. } => Some(tag),
+            InvalidUtf8 { .. } => None,
             Validation { value, .. } => Some(value)
         }
     }
@@ -287,7 +295,7 @@ impl<B: BufRead> MarketXmlParser<B> {
         let mut currency = Currency::default();
         for attr_res in attrs {
             let attr = attr_res.context(self.xml_err_ctx())?;
-            let value = String::from_utf8_lossy(&attr.value).to_string();
+            let value = self.decode_value(&attr.value)?.to_string();
             match attr.key {
                 b"id" => {
                     currency.id = value;
@@ -333,13 +341,12 @@ impl<B: BufRead> MarketXmlParser<B> {
         let mut category = Category::default();
         for attr_res in attrs {
             let attr = attr_res.context(self.xml_err_ctx())?;
-            let value = String::from_utf8_lossy(&attr.value);
             match attr.key {
                 b"id" => {
-                    category.id = self.parse_value(value.as_ref())?;
+                    category.id = self.parse_value(&attr.value)?;
                 }
                 b"parentId" => {
-                    category.parent_id = self.parse_value(value.as_ref())?;
+                    category.parent_id = self.parse_value(&attr.value)?;
                 }
                 _ => {}
             }
@@ -387,16 +394,16 @@ impl<B: BufRead> MarketXmlParser<B> {
             let attr = attr_res.context(self.xml_err_ctx())?;
             match attr.key {
                 b"id" => {
-                    offer.id = String::from_utf8_lossy(&attr.value).to_string();
+                    offer.id = self.decode_value(&attr.value)?.to_string();
                 }
                 b"type" => {
-                    offer.r#type = String::from_utf8_lossy(&attr.value).to_string();
+                    offer.r#type = self.decode_value(&attr.value)?.to_string();
                 }
                 b"bid" => {
-                    offer.bid = self.parse_value(&String::from_utf8_lossy(&attr.value))?
+                    offer.bid = self.parse_value(&attr.value)?;
                 }
                 b"cbid" => {
-                    offer.cbid = self.parse_value(&String::from_utf8_lossy(&attr.value))?
+                    offer.cbid = self.parse_value(&attr.value)?;
                 }
                 b"available" => {
                     offer.available = match attr.value.as_ref() {
@@ -406,7 +413,7 @@ impl<B: BufRead> MarketXmlParser<B> {
                         _ => return Err(MarketXmlError::Validation {
                             msg: "parse bool".to_string(),
                             line: self.current_line(),
-                            value: String::from_utf8_lossy(&attr.value).to_string(),
+                            value: self.decode_value(&attr.value)?.to_string(),
                         }),
                     }
                 }
@@ -530,7 +537,8 @@ impl<B: BufRead> MarketXmlParser<B> {
                 offer.pickup_options = self.parse_delivery_options()?;
             }
             _ => {
-                println!("> {}", String::from_utf8_lossy(tag.name()));
+                // TODO: save unknown fields into some dynamic message
+                // println!("> {}", String::from_utf8_lossy(tag.name()));
             }
         }
         Ok(())
@@ -569,13 +577,13 @@ impl<B: BufRead> MarketXmlParser<B> {
             let attr = attr_res.context(self.xml_err_ctx())?;
             match attr.key {
                 b"cost" => {
-                    option.cost = self.parse_value(&String::from_utf8_lossy(&attr.value))?;
+                    option.cost = self.parse_value(&attr.value)?;
                 }
                 b"days" => {
-                    option.days = String::from_utf8_lossy(&attr.value).to_string();
+                    option.days = self.decode_value(&attr.value)?.to_string();
                 }
                 b"order-before" => {
-                    option.order_before = self.parse_opt(&String::from_utf8_lossy(&attr.value))?;
+                    option.order_before = self.parse_opt(&attr.value)?;
                 }
                 _ => {}
             }
@@ -600,7 +608,7 @@ impl<B: BufRead> MarketXmlParser<B> {
         param.value = self.read_text()?;
         for attr_res in tag_attrs {
             let attr = attr_res.context(self.xml_err_ctx())?;
-            let value = String::from_utf8_lossy(attr.value.as_ref()).to_string();
+            let value = self.decode_value(&attr.value)?.to_string();
             match attr.key {
                 b"name" => {
                     param.name = value;
@@ -626,7 +634,7 @@ impl<B: BufRead> MarketXmlParser<B> {
             let attr = attr_res.context(self.xml_err_ctx())?;
             match attr.key {
                 b"type" => {
-                    condition.r#type = String::from_utf8_lossy(attr.value.as_ref()).to_string();
+                    condition.r#type = self.decode_value(&attr.value)?.to_string();
                 }
                 _ => {}
             }
@@ -660,10 +668,21 @@ impl<B: BufRead> MarketXmlParser<B> {
         for attr_res in tag_attrs {
             let attr = attr_res.context(self.xml_err_ctx())?;
             if attr.key == b"id" {
-                return Ok(Some(String::from_utf8_lossy(&attr.value).to_string()));
+                return Ok(Some(self.decode_value(&attr.value)?.to_string()));
             }
         }
         Ok(None)
+    }
+
+    fn decode_value<'a, 'b>(&'a self, v: &'b[u8]) -> Result<&'b str, MarketXmlError> {
+        str::from_utf8(v)
+            .map_err(|e| {
+                MarketXmlError::InvalidUtf8 {
+                    msg: format!("{}", e),
+                    value: String::from_utf8_lossy(v).to_string(),
+                    line: self.current_line(),
+                }
+            })
     }
 
     fn read_text(&mut self) -> Result<String, MarketXmlError> {
@@ -708,11 +727,12 @@ impl<B: BufRead> MarketXmlParser<B> {
         })
     }
 
-    fn parse_value<T>(&self, s: &str) -> Result<T, MarketXmlError>
+    fn parse_value<T>(&self, v: &[u8]) -> Result<T, MarketXmlError>
     where
         T: FromStr,
         T::Err: Display,
     {
+        let s = self.decode_value(v)?;
         s.parse().map_err(|e| {
             MarketXmlError::Validation {
                 msg: format!("{}", e),
@@ -722,14 +742,15 @@ impl<B: BufRead> MarketXmlParser<B> {
         })
     }
 
-    fn parse_opt<T>(&self, s: &str) -> Result<Option<T>, MarketXmlError>
+    fn parse_opt<T>(&self, v: &[u8]) -> Result<Option<T>, MarketXmlError>
     where
         T: FromStr,
         T::Err: Display,
     {
-        if s == "" {
+        if v == b"" {
             Ok(None)
         } else {
+            let s = self.decode_value(v)?;
             Some(
                 s.parse().map_err(|e| {
                     MarketXmlError::Validation {
@@ -752,7 +773,16 @@ impl<B: BufRead> MarketXmlParser<B> {
                 Event::Text(tag_text) |
                 Event::CData(tag_text) => {
                     let bytes = tag_text.escaped();
-                    text.push_str(&String::from_utf8_lossy(&bytes).trim());
+                    match str::from_utf8(bytes) {
+                        Ok(s) => text.push_str(s.trim()),
+                        Err(e) => {
+                            return Err(MarketXmlError::InvalidUtf8 {
+                                msg: format!("{}", e),
+                                value: String::from_utf8_lossy(bytes).to_string(),
+                                line: self.current_line(),
+                            });
+                        }
+                    }
                 }
                 Event::End(_) => {
                     break;
