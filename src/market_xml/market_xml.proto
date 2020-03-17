@@ -4,6 +4,11 @@ package market_xml;
 
 import "google/protobuf/wrappers.proto";
 
+message YmlCatalog {
+    string date = 1;
+    Shop shop = 2;
+}
+
 message Shop {
     // required
     string name = 1;

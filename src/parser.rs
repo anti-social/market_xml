@@ -11,6 +11,7 @@ use std::str::{self, FromStr};
 
 use crate::market_xml::{
     Category, Condition, Currency, DeliveryOption, Offer, Param, Price, Shop,
+    YmlCatalog,
 };
 
 #[derive(Debug, Snafu)]
@@ -82,7 +83,7 @@ pub(crate) struct MarketXmlParser<B: BufRead> {
     xml_reader: XmlReader<B>,
     buf: Vec<u8>,
     state: State,
-    shop: Shop,
+    yml_catalog: YmlCatalog,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -97,7 +98,7 @@ enum State {
 #[derive(PartialEq, Debug)]
 pub(crate) enum ParsedItem {
     Offer(Offer),
-    Shop(Shop),
+    YmlCatalog(YmlCatalog),
     Eof,
 }
 
@@ -110,7 +111,7 @@ impl<B: BufRead> MarketXmlParser<B> {
             xml_reader,
             buf: vec!(),
             state: State::Begin,
-            shop: Shop::default(),
+            yml_catalog: YmlCatalog::default(),
         }
     }
 
@@ -149,12 +150,12 @@ impl<B: BufRead> MarketXmlParser<B> {
                 }
                 State::YmlCatalog => {
                     self.state = self.parse_yml_catalog()?;
+                    if self.state == State::End {
+                        return Ok(ParsedItem::YmlCatalog(self.yml_catalog.clone()));
+                    }
                 }
                 State::Shop => {
                     self.state = self.parse_shop()?;
-                    if self.state == State::YmlCatalog {
-                        return Ok(ParsedItem::Shop(self.shop.clone()));
-                    }
                 }
                 State::Offers => {
                     match self.parse_offers()? {
@@ -178,6 +179,8 @@ impl<B: BufRead> MarketXmlParser<B> {
             match self.next_event()? {
                 Event::Start(tag) => {
                     if tag.name() == b"yml_catalog" {
+                        let tag = tag.to_owned();
+                        self.parse_yml_catalog_attrs(&mut tag.attributes())?;
                         return Ok(State::YmlCatalog);
                     }
                     return Err(MarketXmlError::UnexpectedTag {
@@ -216,20 +219,33 @@ impl<B: BufRead> MarketXmlParser<B> {
         }
     }
 
+    fn parse_yml_catalog_attrs(&mut self, attrs: &mut Attributes) -> Result<(), MarketXmlError> {
+        for attr_res in attrs {
+            let attr = attr_res.context(self.xml_err_ctx())?;
+            match attr.key {
+                b"date" => {
+                    self.yml_catalog.date = self.decode_value(&attr.value)?.to_string();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn parse_shop(&mut self) -> Result<State, MarketXmlError> {
-        Ok(loop {
+        loop {
             match self.next_event()? {
                 Event::Start(tag) |
                 Event::Empty(tag) => {
                     if tag.name() == b"offers" {
-                        break State::Offers;
+                        return Ok(State::Offers);
                     }
                     let tag = tag.to_owned();
                     self.parse_shop_field(tag)?;
                 }
                 Event::End(tag) => {
                     if tag.name() == b"shop" {
-                        break State::YmlCatalog;
+                        return Ok(State::YmlCatalog);
                     }
                 }
                 Event::Eof => {
@@ -238,28 +254,31 @@ impl<B: BufRead> MarketXmlParser<B> {
                 },
                 _ => {}
             }
-        })
+        }
     }
 
     fn parse_shop_field(&mut self, tag: BytesStart) -> Result<(), MarketXmlError> {
+        fn get_shop(yml_catalog: &mut YmlCatalog) -> &mut Shop {
+            yml_catalog.shop.get_or_insert(Shop::default())
+        };
         match tag.name() {
             b"name" => {
-                self.shop.name = self.read_text()?;
+                get_shop(&mut self.yml_catalog).name = self.read_text()?;
             }
             b"company" => {
-                self.shop.company = self.read_text()?;
+                get_shop(&mut self.yml_catalog).company = self.read_text()?;
             }
             b"url" => {
-                self.shop.url = self.read_text()?;
+                get_shop(&mut self.yml_catalog).url = self.read_text()?;
             }
             b"currencies" => {
-                self.shop.currencies = self.parse_currencies()?;
+                get_shop(&mut self.yml_catalog).currencies = self.parse_currencies()?;
             }
             b"categories" => {
-                self.shop.categories = self.parse_categories()?;
+                get_shop(&mut self.yml_catalog).categories = self.parse_categories()?;
             }
             b"delivery-options" => {
-                self.shop.delivery_options = self.parse_delivery_options()?;
+                get_shop(&mut self.yml_catalog).delivery_options = self.parse_delivery_options()?;
             }
             _ => {}
         }
@@ -838,11 +857,13 @@ mod tests {
             MarketXmlConfig::default(),
             reader
         );
-        let s = match parser.next_item()? {
-            ParsedItem::Shop(shop) => shop,
-            _ => bail!("Expected shop"),
+        let c = match parser.next_item()? {
+            ParsedItem::YmlCatalog(yml_catalog) => yml_catalog,
+            _ => bail!("Expected yml_catalog"),
         };
-        assert_eq!(parser.current_line(), 18);
+        assert_eq!(parser.current_line(), 19);
+        assert_eq!(&c.date, "2019-11-01 17:22");
+        let s = c.shop.unwrap();
         assert_eq!(&s.name, "BestSeller");
         assert_eq!(&s.company, "Tne Best inc.");
         assert_eq!(&s.url, "http://best.seller.ru");
@@ -875,6 +896,7 @@ mod tests {
         let xml = r#"
         <yml_catalog>
           <shop>
+            <name>Хладкомбинат</name>
             <offers>
               <offer id="9012" bid="80">
                 <name>Мороженица Brand 3811</name>
@@ -927,7 +949,7 @@ mod tests {
             ParsedItem::Offer(offer) => offer,
             _ => bail!("Expected offer"),
         };
-        assert_eq!(parser.current_line(), 42);
+        assert_eq!(parser.current_line(), 43);
         assert_eq!(&o.id, "9012");
         assert_eq!(o.bid, 80);
         assert_eq!(&o.name, "Мороженица Brand 3811");
@@ -980,12 +1002,14 @@ mod tests {
         assert_eq!(o.weight, 3.6);
         assert_eq!(&o.dimensions, "20.1/20.551/22.5");
 
-        let s = match parser.next_item()? {
-            ParsedItem::Shop(shop) => shop,
-            _ => bail!("Expected shop"),
+        let c = match parser.next_item()? {
+            ParsedItem::YmlCatalog(yml_catalog) => yml_catalog,
+            _ => bail!("Expected yml_catalog"),
         };
-        assert_eq!(parser.current_line(), 44);
-        assert_eq!(&s.name, "");
+        assert_eq!(parser.current_line(), 46);
+        assert_eq!(&c.date, "");
+        let s = c.shop.unwrap();
+        assert_eq!(&s.name, "Хладкомбинат");
 
         assert_eq!(parser.next_item()?, ParsedItem::Eof);
 

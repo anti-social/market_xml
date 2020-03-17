@@ -101,9 +101,9 @@ fn main() -> Result<(), CliError> {
                 offers.offers.push(offer);
                 total_offers += 1;
             }
-            Ok(ParsedItem::Shop(shop)) => {
+            Ok(ParsedItem::YmlCatalog(yml_catalog)) => {
                 if !opts.dry_run {
-                    write_message(&opts.output_dir, "shop.protobuf", &shop, &mut buf)?;
+                    write_message(&opts.output_dir, "yml_catalog.protobuf", &yml_catalog, &mut buf)?;
                 }
             }
             Ok(ParsedItem::Eof) => {
