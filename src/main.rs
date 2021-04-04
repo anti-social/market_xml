@@ -12,7 +12,7 @@ use prost::{EncodeError, Message};
 
 use snafu::{ResultExt, Snafu};
 
-use std::io::{self, BufReader, Write, SeekFrom};
+use std::io::{self, BufReader, BufWriter, Write, SeekFrom};
 use std::io::prelude::*;
 use std::ffi::OsStr;
 use std::fs::{self, create_dir_all, File, OpenOptions};
@@ -68,7 +68,7 @@ fn main() -> Result<(), CliError> {
         .context(OpenInputFile { path: opts.xml_file })?;
     let mut parser = MarketXmlParser::new(MarketXmlConfig::default(), file_reader);
 
-    if !opts.output_dir.exists() {
+    if !opts.dry_run && !opts.output_dir.exists() {
         create_dir_all(&opts.output_dir)
             .context(CreateOutputDir { path: opts.output_dir.clone() })?;
     }
@@ -86,10 +86,19 @@ fn main() -> Result<(), CliError> {
     };
 
     let mut buf = BytesMut::new();
-    let mut offers = market_xml::Offers::default();
     let mut errors = market_xml::Errors::default();
     let mut available_offer_ids = market_xml::AvailableOfferIds::default();
     let mut chunk_ix = 0;
+    let mut chunk_offers = 0;
+    let mut offers_writer = if !opts.dry_run {
+        Some(
+            DelimitedMessageWriter::open(
+                &opts.output_dir, &format!("offers-{}.protobuf-delimited", chunk_ix)
+            )?
+        )
+    } else {
+        None
+    };
     let mut total_offers = 0;
     let mut offers_with_errors = 0;
     loop {
@@ -98,7 +107,19 @@ fn main() -> Result<(), CliError> {
                 if offer.available.unwrap_or(true) {
                     available_offer_ids.offer_ids.push(offer.id.clone());
                 }
-                offers.offers.push(offer);
+                if let Some(ref mut offers_writer) = offers_writer {
+                    offers_writer.write(&offer, &mut buf)?;
+                    chunk_offers += 1;
+                }
+                if chunk_offers == opts.offers_chunk_size {
+                    chunk_ix += 1;
+                    chunk_offers = 0;
+                    offers_writer = Some(
+                        DelimitedMessageWriter::open(
+                            &opts.output_dir, &format!("offers-{}.protobuf-delimited", chunk_ix)
+                        )?
+                    );
+                }
                 total_offers += 1;
             }
             Ok(ParsedItem::YmlCatalog(yml_catalog)) => {
@@ -131,28 +152,12 @@ fn main() -> Result<(), CliError> {
             },
         }
 
-        if offers.offers.len() as u32 >= opts.offers_chunk_size {
-            if !opts.dry_run {
-                write_message(
-                    &opts.output_dir, &format!("offers-{}.protobuf", chunk_ix), &offers, &mut buf
-                )?;
-            }
-            offers.clear();
-            chunk_ix += 1;
-        }
-
         progressbar.as_ref().map(|pb| {
             let cur_pos = parser.buffer_position() as u64;
             if cur_pos - pb.position() > file_size / 100 {
                 pb.set_position(cur_pos);
             }
         });
-    }
-
-    if !offers.offers.is_empty() && !opts.dry_run {
-        write_message(
-            &opts.output_dir, &format!("offers-{}.protobuf", chunk_ix), &offers, &mut buf
-        )?;
     }
 
     if !available_offer_ids.offer_ids.is_empty() && !opts.dry_run {
@@ -216,4 +221,32 @@ fn write_message<M: Message>(
     buf.clear();
 
     Ok(file_path)
+}
+
+struct DelimitedMessageWriter {
+    file_path: PathBuf,
+    writer: BufWriter<File>,
+}
+
+impl DelimitedMessageWriter {
+    fn open(out_dir: &Path, file_name: &str) -> Result<Self, CliError> {
+        let mut file_path = out_dir.to_path_buf();
+        file_path.push(file_name);
+        let file = OpenOptions::new().create_new(true).write(true)
+            .open(&file_path)
+            .context(OpenOutputFile { path: file_path.clone() })?;
+        Ok(Self {
+            file_path,
+            writer: BufWriter::new(file),
+        })
+    }
+
+    fn write<M: Message>(&mut self, msg: &M, buf: &mut BytesMut) -> Result<(), CliError> {
+        msg.encode_length_delimited(buf).context(ProtobufEncode)?;
+        self.writer.write_all(buf)
+            .context(WriteOutputFile { path: self.file_path.clone() })?;
+        buf.clear();
+    
+        Ok(())
+    }
 }
