@@ -17,8 +17,8 @@ flate2 = "1.0"
 indicatif = "0.14"
 prost = "0.6"
 prost-types = "0.6"
-# quick-xml = "0.17"
-quick-xml = { git = "https://github.com/anti-social/quick-xml", rev = "721dee7" }
+# quick-xml = "0.22"
+quick-xml = { git = "https://github.com/anti-social/quick-xml", rev = "5ef43af" }
 snafu = "0.6"
 snafu-derive = "0.6"
 

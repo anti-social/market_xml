@@ -1,4 +1,4 @@
-use quick_xml::{Reader as XmlReader, Error as XmlError};
+use quick_xml::{PositionWithLine, Reader as XmlReader, Error as XmlError};
 use quick_xml::events::{Event, BytesStart};
 use quick_xml::events::attributes::Attributes;
 
@@ -20,22 +20,26 @@ pub(crate) enum MarketXmlError {
     Xml {
         source: XmlError,
         line: usize,
+        column: usize,
     },
     #[snafu(display("Unexpected tag"))]
     UnexpectedTag {
         tag: String,
         line: usize,
+        column: usize,
     },
     #[snafu(display("{}", msg))]
     InvalidUtf8 {
         msg: String,
         line: usize,
+        column: usize,
         value: String,
     },
     #[snafu(display("{}", msg))]
     Validation {
         msg: String,
         line: usize,
+        column: usize,
         value: String,
     }
 }
@@ -49,6 +53,17 @@ impl MarketXmlError {
             UnexpectedTag { line, .. } => line,
             InvalidUtf8 { line, .. } => line,
             Validation { line, .. } => line,
+        }
+    }
+
+    pub(crate) fn column(&self) -> usize {
+        use MarketXmlError::*;
+
+        match *self {
+            Xml { column, .. } => column,
+            UnexpectedTag { column, .. } => column,
+            InvalidUtf8 { column, .. } => column,
+            Validation { column, .. } => column,
         }
     }
 
@@ -80,7 +95,7 @@ impl Default for MarketXmlConfig {
 
 pub(crate) struct MarketXmlParser<B: BufRead> {
     config: MarketXmlConfig,
-    xml_reader: XmlReader<B>,
+    xml_reader: XmlReader<B, PositionWithLine>,
     buf: Vec<u8>,
     state: State,
     yml_catalog: YmlCatalog,
@@ -104,7 +119,9 @@ pub(crate) enum ParsedItem {
 
 impl<B: BufRead> MarketXmlParser<B> {
     pub(crate) fn new(config: MarketXmlConfig, reader: B) -> Self {
-        let mut xml_reader = XmlReader::from_reader(reader);
+        let mut xml_reader = XmlReader::from_reader_with_position_tracker(
+            reader, PositionWithLine::default()
+        );
         xml_reader.trim_text(true);
         Self {
             config,
@@ -115,28 +132,36 @@ impl<B: BufRead> MarketXmlParser<B> {
         }
     }
 
-    fn current_line(&self) -> usize {
-        self.xml_reader.line_number()
+    fn cur_line(&self) -> usize {
+        self.xml_reader.position().line()
+    }
+
+    fn cur_column(&self) -> usize {
+        self.xml_reader.position().column()
     }
 
     pub(crate) fn buffer_position(&self) -> usize {
         self.xml_reader.buffer_position()
     }
 
-    fn xml_err_ctx(&self) -> Xml<usize> {
+    fn xml_err_ctx(&self) -> Xml<usize, usize> {
         Xml {
-            line: self.xml_reader.line_number(),
+            line: self.cur_line(),
+            column: self.cur_column(),
         }
     }
 
     fn next_event(&mut self) -> Result<Event, MarketXmlError> {
+        let line = self.cur_line();
+        let column = self.cur_column();
         let event_res = self.xml_reader.read_event(&mut self.buf);
         match event_res {
             Ok(event) => Ok(event),
             Err(error) => {
                 Err(MarketXmlError::Xml {
                     source: error,
-                    line: self.xml_reader.line_number(),
+                    line,
+                    column,
                 })
             }
         }
@@ -185,7 +210,8 @@ impl<B: BufRead> MarketXmlParser<B> {
                     }
                     return Err(MarketXmlError::UnexpectedTag {
                         tag: String::from_utf8_lossy(tag.name()).to_string(),
-                        line: self.current_line(),
+                        line: self.cur_line(),
+                        column: self.cur_column(),
                     });
                 }
                 Event::Eof => {
@@ -260,7 +286,7 @@ impl<B: BufRead> MarketXmlParser<B> {
     fn parse_shop_field(&mut self, tag: BytesStart) -> Result<(), MarketXmlError> {
         fn get_shop(yml_catalog: &mut YmlCatalog) -> &mut Shop {
             yml_catalog.shop.get_or_insert(Shop::default())
-        };
+        }
         match tag.name() {
             b"name" => {
                 get_shop(&mut self.yml_catalog).name = self.read_text()?;
@@ -431,7 +457,8 @@ impl<B: BufRead> MarketXmlParser<B> {
                         b"" => None,
                         _ => return Err(MarketXmlError::Validation {
                             msg: "parse bool".to_string(),
-                            line: self.current_line(),
+                            line: self.cur_line(),
+                            column: self.cur_column(),
                             value: self.decode_value(&attr.value)?.to_string(),
                         }),
                     }
@@ -699,13 +726,14 @@ impl<B: BufRead> MarketXmlParser<B> {
                 MarketXmlError::InvalidUtf8 {
                     msg: format!("{}", e),
                     value: String::from_utf8_lossy(v).to_string(),
-                    line: self.current_line(),
+                    line: self.cur_line(),
+                    column: self.cur_column(),
                 }
             })
     }
 
     fn read_text(&mut self) -> Result<String, MarketXmlError> {
-        self.read_text_and_parse(|s, _| Ok(s.to_string()))
+        self.read_text_and_parse(|s, _, _| Ok(s.to_string()))
     }
 
     fn read_value<T>(&mut self) -> Result<T, MarketXmlError>
@@ -713,11 +741,12 @@ impl<B: BufRead> MarketXmlParser<B> {
         T: FromStr,
         T::Err: Display,
     {
-        self.read_text_and_parse(|s, line| {
+        self.read_text_and_parse(|s, line, column| {
             s.parse().map_err(|e| {
                 MarketXmlError::Validation {
                     msg: format!("{}", e),
                     line,
+                    column,
                     value: s.to_string(),
                 }
             })
@@ -729,7 +758,7 @@ impl<B: BufRead> MarketXmlParser<B> {
         T: FromStr,
         T::Err: Display,
     {
-        self.read_text_and_parse(|s, line| {
+        self.read_text_and_parse(|s, line, column| {
             if s == "" {
                 Ok(None)
             } else {
@@ -738,6 +767,7 @@ impl<B: BufRead> MarketXmlParser<B> {
                         MarketXmlError::Validation {
                             msg: format!("{}", e),
                             line,
+                            column,
                             value: s.to_string(),
                         }
                     })
@@ -755,7 +785,8 @@ impl<B: BufRead> MarketXmlParser<B> {
         s.parse().map_err(|e| {
             MarketXmlError::Validation {
                 msg: format!("{}", e),
-                line: self.current_line(),
+                line: self.cur_line(),
+                column: self.cur_column(),
                 value: s.to_string(),
             }
         })
@@ -774,7 +805,8 @@ impl<B: BufRead> MarketXmlParser<B> {
                 s.parse().map_err(|e| {
                     MarketXmlError::Validation {
                         msg: format!("{}", e),
-                        line: self.current_line(),
+                        line: self.cur_line(),
+                        column: self.cur_column(),
                         value: s.to_string(),
                     }
                 })
@@ -784,7 +816,7 @@ impl<B: BufRead> MarketXmlParser<B> {
 
     fn read_text_and_parse<F, T>(&mut self, f: F) -> Result<T, MarketXmlError>
     where
-        F: FnOnce(&str, usize) -> Result<T, MarketXmlError>,
+        F: FnOnce(&str, usize, usize) -> Result<T, MarketXmlError>,
     {
         let mut text = String::new();
         loop {
@@ -798,7 +830,8 @@ impl<B: BufRead> MarketXmlParser<B> {
                             return Err(MarketXmlError::InvalidUtf8 {
                                 msg: format!("{}", e),
                                 value: String::from_utf8_lossy(bytes).to_string(),
-                                line: self.current_line(),
+                                line: self.cur_line(),
+                                column: self.cur_column(),
                             });
                         }
                     }
@@ -808,15 +841,17 @@ impl<B: BufRead> MarketXmlParser<B> {
                 }
                 Event::Eof => return Err(MarketXmlError::Xml {
                     source: XmlError::UnexpectedEof("Text".to_string()),
-                    line: self.current_line(),
+                    line: self.cur_line(),
+                    column: self.cur_column(),
                 }),
                 _ => return Err(MarketXmlError::Xml {
                     source: XmlError::TextNotFound,
-                    line: self.current_line(),
+                    line: self.cur_line(),
+                    column: self.cur_column(),
                 }),
             }
         }
-        f(&text, self.current_line())
+        f(&text, self.cur_line(), self.cur_column())
     }
 }
 

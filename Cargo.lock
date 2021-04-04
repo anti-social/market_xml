@@ -324,9 +324,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.3.3"
+version = "2.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3728d817d99e5ac407411fa471ff9800a778d88a24685968b36824eaf4bee400"
+checksum = "0ee1c47aaa256ecabcaea351eae4a9b01ef39ed810004e298d2511ed284b1525"
 
 [[package]]
 name = "miniz_oxide"
@@ -453,8 +453,8 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.17.2"
-source = "git+https://github.com/anti-social/quick-xml?rev=721dee7#721dee7f606474f0bc58219d6932cbf35c820a93"
+version = "0.22.0"
+source = "git+https://github.com/anti-social/quick-xml?rev=5ef43af#5ef43afb59e4a2f9a151a52b6faf3834b3486905"
 dependencies = [
  "memchr",
 ]

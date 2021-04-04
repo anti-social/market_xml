@@ -122,6 +122,7 @@ fn main() -> Result<(), CliError> {
                 }
                 errors.errors.push(market_xml::Error {
                     line: e.line() as u64,
+                    column: e.column() as u64,
                     message: format!("{}", e),
                     value: e.value().map(|v| v.to_string()).unwrap_or("".to_string()),
                 });
