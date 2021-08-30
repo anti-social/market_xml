@@ -141,6 +141,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmake"
+version = "0.1.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81fb25b677f8bf1eb325017cb6bb8452f87969db0fedb4f757b297bee78a7c62"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "console"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -295,6 +304,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eb147597cdf94ed43ab7a9038716637d2d1bf2bc571da995d0028dec06bd3018"
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b87ffa7aa24a1b71beebc6be14ad552d4314ec5be3b3bb3e1159c61a8b01a0bd"
+dependencies = [
+ "cmake",
+]
+
+[[package]]
 name = "log"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -314,6 +332,7 @@ dependencies = [
  "failure_derive",
  "flate2",
  "indicatif",
+ "mimalloc",
  "prost",
  "prost-build",
  "prost-types",
@@ -327,6 +346,15 @@ name = "memchr"
 version = "2.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ee1c47aaa256ecabcaea351eae4a9b01ef39ed810004e298d2511ed284b1525"
+
+[[package]]
+name = "mimalloc"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94b16eee4eb86e92abf8ad6910fd3219549ba344d5d77194a6def2119173f2de"
+dependencies = [
+ "libmimalloc-sys",
+]
 
 [[package]]
 name = "miniz_oxide"

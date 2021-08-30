@@ -25,6 +25,9 @@ pub(crate) mod market_xml {
     include!(concat!(env!("OUT_DIR"), "/market_xml.rs"));
 }
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Clap, Debug)]
 struct Opts {
     #[clap(long = "offers-chunk", default_value = "50000")]
