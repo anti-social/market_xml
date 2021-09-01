@@ -94,7 +94,7 @@ message Offer {
     uint32 group_id = 38;
 }
 
-message AvailableOfferIds {
+message OfferIds {
     repeated string offer_ids = 1;
 }
 

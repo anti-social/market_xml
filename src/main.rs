@@ -90,7 +90,9 @@ fn main() -> Result<(), CliError> {
 
     let mut buf = BytesMut::new();
     let mut errors = market_xml::Errors::default();
-    let mut available_offer_ids = market_xml::AvailableOfferIds::default();
+    let mut available_offer_ids = market_xml::OfferIds::default();
+    let mut unavailable_offer_ids = market_xml::OfferIds::default();
+    let mut availability_missing_offer_ids = market_xml::OfferIds::default();
     let mut chunk_ix = 0;
     let mut chunk_offers = 0;
     let mut offers_writer = if !opts.dry_run {
@@ -107,8 +109,19 @@ fn main() -> Result<(), CliError> {
     loop {
         match parser.next_item() {
             Ok(ParsedItem::Offer(offer)) => {
-                if offer.available.unwrap_or(true) {
-                    available_offer_ids.offer_ids.push(offer.id.clone());
+                match offer.available {
+                    Some(true) => {
+                        available_offer_ids.offer_ids.push(offer.id.clone());
+                    }
+                    Some(false) => {
+                        unavailable_offer_ids.offer_ids.push(offer.id.clone());
+                    }
+                    None => {
+                        availability_missing_offer_ids.offer_ids.push(offer.id.clone());
+                    }
+                }
+                if offer.available.unwrap_or(false) {
+
                 }
                 if let Some(ref mut offers_writer) = offers_writer {
                     offers_writer.write(&offer, &mut buf)?;
@@ -163,11 +176,23 @@ fn main() -> Result<(), CliError> {
         });
     }
 
-    if !available_offer_ids.offer_ids.is_empty() && !opts.dry_run {
+    if !opts.dry_run {
         write_message(
             &opts.output_dir,
-            &format!("available-offer-ids.protobuf"),
+            &format!("offer-ids-available.protobuf"),
             &available_offer_ids,
+            &mut buf
+        )?;
+        write_message(
+            &opts.output_dir,
+            &format!("offer-ids-unavailable.protobuf"),
+            &unavailable_offer_ids,
+            &mut buf
+        )?;
+        write_message(
+            &opts.output_dir,
+            &format!("offer-ids-availability-missing.protobuf"),
+            &availability_missing_offer_ids,
             &mut buf
         )?;
     }
