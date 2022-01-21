@@ -95,7 +95,7 @@ message Offer {
 }
 
 message OfferIds {
-    repeated string offer_ids = 1;
+    repeated string ids = 1;
 }
 
 message Price {

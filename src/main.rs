@@ -111,13 +111,13 @@ fn main() -> Result<(), CliError> {
             Ok(ParsedItem::Offer(offer)) => {
                 match offer.available {
                     Some(true) => {
-                        available_offer_ids.offer_ids.push(offer.id.clone());
+                        available_offer_ids.ids.push(offer.id.clone());
                     }
                     Some(false) => {
-                        unavailable_offer_ids.offer_ids.push(offer.id.clone());
+                        unavailable_offer_ids.ids.push(offer.id.clone());
                     }
                     None => {
-                        availability_missing_offer_ids.offer_ids.push(offer.id.clone());
+                        availability_missing_offer_ids.ids.push(offer.id.clone());
                     }
                 }
                 if offer.available.unwrap_or(false) {
@@ -177,6 +177,9 @@ fn main() -> Result<(), CliError> {
     }
 
     if !opts.dry_run {
+        available_offer_ids.ids.sort_unstable();
+        unavailable_offer_ids.ids.sort_unstable();
+        availability_missing_offer_ids.ids.sort_unstable();
         write_message(
             &opts.output_dir,
             &format!("offer-ids-available.protobuf"),
