@@ -70,7 +70,7 @@ message Offer {
     uint32 bid = 14;
     uint32 cbid = 15;
     bool enable_auto_discounts = 16;
-    string picture = 17;
+    repeated string pictures = 17;
     google.protobuf.BoolValue delivery = 18;
     google.protobuf.BoolValue pickup = 19;
     repeated DeliveryOption delivery_options = 20;

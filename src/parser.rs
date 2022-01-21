@@ -508,7 +508,7 @@ impl<B: BufRead> MarketXmlParser<B> {
                 offer.url = self.read_text()?;
             }
             b"picture" => {
-                offer.picture = self.read_text()?;
+                offer.pictures.push(self.read_text()?);
             }
             b"price" => {
                 let tag = tag.to_owned();
