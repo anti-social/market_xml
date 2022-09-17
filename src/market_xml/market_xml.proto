@@ -3,6 +3,7 @@ syntax = "proto3";
 package market_xml;
 
 import "google/protobuf/wrappers.proto";
+import "google/protobuf/struct.proto";
 
 message YmlCatalog {
     string date = 1;
@@ -92,6 +93,12 @@ message Offer {
     bool downloadable = 36;
     Age age = 37;
     uint32 group_id = 38;
+
+    map<string, OfferExtraField> extra_fields = 39;
+}
+
+message OfferExtraField {
+    repeated string values = 1;
 }
 
 message OfferIds {

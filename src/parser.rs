@@ -5,12 +5,13 @@ use quick_xml::events::attributes::Attributes;
 use snafu::{ResultExt, Snafu};
 
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::io::prelude::BufRead;
 use std::fmt::Display;
 use std::str::{self, FromStr};
 
 use crate::market_xml::{
-    Category, Condition, Currency, DeliveryOption, Offer, Param, Price, Shop,
+    Category, Condition, Currency, DeliveryOption, Offer, OfferExtraField, Param, Price, Shop,
     YmlCatalog,
 };
 
@@ -582,9 +583,16 @@ impl<B: BufRead> MarketXmlParser<B> {
             b"pickup-options" => {
                 offer.pickup_options = self.parse_delivery_options()?;
             }
-            _ => {
-                // TODO: save unknown fields into some dynamic message
-                // println!("> {}", String::from_utf8_lossy(tag.name()));
+            field_name => {
+                let field_value = self.read_text()?;
+                match offer.extra_fields.entry(self.decode_value(field_name)?.to_string()) {
+                    Entry::Occupied(mut entry) => {
+                        entry.get_mut().values.push(field_value);
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(OfferExtraField { values: vec!(field_value) });
+                    }
+                }
             }
         }
         Ok(())
@@ -867,11 +875,12 @@ impl<B: BufRead> MarketXmlParser<B> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::BufReader;
 
     use failure::{bail, Error};
 
-    use crate::market_xml::{Category, Condition, Currency, DeliveryOption, Param};
+    use crate::market_xml::{Category, Condition, Currency, DeliveryOption, OfferExtraField, Param};
     use super::{MarketXmlConfig, MarketXmlParser, ParsedItem};
 
     #[test]
@@ -980,6 +989,8 @@ mod tests {
                 <credit-template id="20034"/>
                 <weight>3.6</weight>
                 <dimensions>20.1/20.551/22.5</dimensions>
+                <supplier_id>supplier-1</supplier_id>
+                <supplier_id>supplier-2</supplier_id>
               </offer>
             </offers>
           </shop>
@@ -994,7 +1005,7 @@ mod tests {
             ParsedItem::Offer(offer) => offer,
             _ => bail!("Expected offer"),
         };
-        assert_eq!(parser.cur_line(), 44);
+        assert_eq!(parser.cur_line(), 46);
         assert_eq!(&o.id, "9012");
         assert_eq!(o.bid, 80);
         assert_eq!(&o.name, "Мороженица Brand 3811");
@@ -1047,12 +1058,18 @@ mod tests {
         assert_eq!(&o.credit_template_id, "20034");
         assert_eq!(o.weight, 3.6);
         assert_eq!(&o.dimensions, "20.1/20.551/22.5");
+        let mut expected_extra_fields = HashMap::new();
+        expected_extra_fields.insert(
+            "supplier_id".to_string(),
+            OfferExtraField { values: vec!("supplier-1".to_string(), "supplier-2".to_string()) }
+        );
+        assert_eq!(o.extra_fields, expected_extra_fields);
 
         let c = match parser.next_item()? {
             ParsedItem::YmlCatalog(yml_catalog) => yml_catalog,
             _ => bail!("Expected yml_catalog"),
         };
-        assert_eq!(parser.cur_line(), 47);
+        assert_eq!(parser.cur_line(), 49);
         assert_eq!(&c.date, "");
         let s = c.shop.unwrap();
         assert_eq!(&s.name, "Хладкомбинат");
