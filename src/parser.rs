@@ -823,13 +823,22 @@ impl<B: BufRead> MarketXmlParser<B> {
             match self.next_event()? {
                 Event::Text(tag_text) |
                 Event::CData(tag_text) => {
-                    let bytes = tag_text.escaped();
-                    match str::from_utf8(bytes) {
+                    let bytes = match tag_text.unescaped() {
+                        Ok(bytes) => bytes,
+                        Err(e) => {
+                            return Err(MarketXmlError::Xml {
+                                source: e,
+                                line: self.cur_line(),
+                                column: self.cur_column(),
+                            });
+                        }
+                    };
+                    match str::from_utf8(&bytes) {
                         Ok(s) => text.push_str(s.trim()),
                         Err(e) => {
                             return Err(MarketXmlError::InvalidUtf8 {
                                 msg: format!("{}", e),
-                                value: String::from_utf8_lossy(bytes).to_string(),
+                                value: String::from_utf8_lossy(&bytes).to_string(),
                                 line: self.cur_line(),
                                 column: self.cur_column(),
                             });
@@ -896,7 +905,7 @@ mod tests {
             ParsedItem::YmlCatalog(yml_catalog) => yml_catalog,
             _ => bail!("Expected yml_catalog"),
         };
-        assert_eq!(parser.current_line(), 19);
+        assert_eq!(parser.cur_line(), 19);
         assert_eq!(&c.date, "2019-11-01 17:22");
         let s = c.shop.unwrap();
         assert_eq!(&s.name, "BestSeller");
@@ -957,6 +966,7 @@ mod tests {
                   <![CDATA[
                     <h3>Мороженица Brand 3811</h3>
                     <p>Это прибор, который придётся по вкусу всем любителям десертов и сладостей, ведь с его помощью вы сможете делать вкусное домашнее мороженое из натуральных ингредиентов.</p>
+                    &lt;
                   ]]>
                 </description>
                 <sales_notes>Необходима предоплата.</sales_notes>
@@ -984,7 +994,7 @@ mod tests {
             ParsedItem::Offer(offer) => offer,
             _ => bail!("Expected offer"),
         };
-        assert_eq!(parser.current_line(), 43);
+        assert_eq!(parser.cur_line(), 44);
         assert_eq!(&o.id, "9012");
         assert_eq!(o.bid, 80);
         assert_eq!(&o.name, "Мороженица Brand 3811");
@@ -996,7 +1006,7 @@ mod tests {
         assert_eq!(o.enable_auto_discounts, true);
         assert_eq!(&o.currency_id, "RUR");
         assert_eq!(o.category_id, 101);
-        assert_eq!(&o.picture, "http://best.seller.ru/img/model_12345.jpg");
+        assert_eq!(o.pictures, vec!("http://best.seller.ru/img/model_12345.jpg"));
         assert_eq!(o.delivery, Some(true));
         assert_eq!(o.pickup, Some(true));
         assert_eq!(
@@ -1015,7 +1025,8 @@ mod tests {
         assert_eq!(
             &o.description,
             r#"<h3>Мороженица Brand 3811</h3>
-                    <p>Это прибор, который придётся по вкусу всем любителям десертов и сладостей, ведь с его помощью вы сможете делать вкусное домашнее мороженое из натуральных ингредиентов.</p>"#
+                    <p>Это прибор, который придётся по вкусу всем любителям десертов и сладостей, ведь с его помощью вы сможете делать вкусное домашнее мороженое из натуральных ингредиентов.</p>
+                    &lt;"#
         );
         assert_eq!(&o.sales_notes, "Необходима предоплата.");
         assert_eq!(o.manufacturer_warranty, true);
@@ -1041,7 +1052,7 @@ mod tests {
             ParsedItem::YmlCatalog(yml_catalog) => yml_catalog,
             _ => bail!("Expected yml_catalog"),
         };
-        assert_eq!(parser.current_line(), 46);
+        assert_eq!(parser.cur_line(), 47);
         assert_eq!(&c.date, "");
         let s = c.shop.unwrap();
         assert_eq!(&s.name, "Хладкомбинат");
