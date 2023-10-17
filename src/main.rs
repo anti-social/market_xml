@@ -40,7 +40,9 @@ struct Opts {
     dry_run: bool,
     #[clap(long = "verbose", short = "v")]
     verbose: bool,
-    xml_file: PathBuf,
+    #[clap(long="if-modified-since")]
+    if_modified_since: Option<String>,
+    xml_file: String,
 }
 
 #[derive(Debug, Snafu)]
@@ -59,33 +61,67 @@ enum CliError {
     WriteOutputFile { source: io::Error, path: PathBuf },
     #[snafu(display("Error when encoding to protobuf: {}", source))]
     ProtobufEncode { source: EncodeError },
+    #[snafu(display("Error when downloading an xml file: {}", source))]
+    Reqwest { source: reqwest::Error },
 }
 
 fn main() -> Result<(), CliError> {
+    env_logger::init();
+
     let opts = Opts::parse();
     if opts.offers_chunk_size == 0 {
         return Err(CliError::InvalidOpt { msg: "offers-chunk must be greater than 0".to_string() });
     }
 
-    let (file_reader, file_size) = open_market_xml_file(opts.xml_file.as_path())
-        .context(OpenInputFile { path: opts.xml_file })?;
+    let (file_reader, file_size) = if opts.xml_file.starts_with("http://") || opts.xml_file.starts_with("https://") {
+        let client = reqwest::blocking::ClientBuilder::new()
+            .gzip(true)
+            .build()
+            .context(Reqwest)?;
+        let request = client.get(&opts.xml_file);
+        let request = if let Some(if_modified_since) = opts.if_modified_since {
+            request.header(reqwest::header::IF_MODIFIED_SINCE, if_modified_since)
+        } else {
+            request
+        };
+        let response = request
+            .send()
+            .context(Reqwest)?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            println!("Not modified");
+            return Ok(());
+        }
+        if let Some(Ok(last_modified)) = response.headers().get(reqwest::header::LAST_MODIFIED).map(|v| v.to_str()) {
+            if !opts.dry_run {
+                ensure_output_dir(&opts.output_dir)?;
+            }
+            let last_modified_path = opts.output_dir.join("last-modified.txt");
+            std::fs::write(&last_modified_path, last_modified)
+                .context(WriteOutputFile { path: last_modified_path })?;
+        }
+        let content_length = response.content_length();
+        (Box::new(BufReader::new(response)) as Box<dyn BufRead>, content_length)
+    } else {
+        open_market_xml_file(PathBuf::from(&opts.xml_file).as_path())
+            .context(OpenInputFile { path: opts.xml_file })?
+    };
     let mut parser = MarketXmlParser::new(MarketXmlConfig::default(), file_reader);
 
-    if !opts.dry_run && !opts.output_dir.exists() {
-        create_dir_all(&opts.output_dir)
-            .context(CreateOutputDir { path: opts.output_dir.clone() })?;
+    if !opts.dry_run {
+        ensure_output_dir(&opts.output_dir)?;
     }
 
-    let progressbar = if opts.no_progress {
-        None
-    } else {
+    let progressbar = match (opts.no_progress, file_size) {
+        (false, Some(file_size)) => {
         let pb = ProgressBar::new(file_size);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) parsing file")
-                .progress_chars("#>-")
-        );
-        Some(pb)
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) parsing file")
+                    .progress_chars("#>-")
+            );
+            Some(pb)
+        }
+        _ => None
     };
 
     let mut buf = BytesMut::new();
@@ -152,9 +188,9 @@ fn main() -> Result<(), CliError> {
                 }
                 if opts.verbose {
                     if let Some(err_value) = e.value() {
-                        eprintln!("Line {}: {}: {}", e.line(), e, err_value);
+                        log::error!("Line {}: {}: {}", e.line(), e, err_value);
                     } else {
-                        eprintln!("Line {}: {}", e.line(), e);
+                        log::error!("Line {}: {}", e.line(), e);
                     }
                 }
                 errors.errors.push(market_xml::Error {
@@ -170,7 +206,7 @@ fn main() -> Result<(), CliError> {
 
         progressbar.as_ref().map(|pb| {
             let cur_pos = parser.buffer_position() as u64;
-            if cur_pos - pb.position() > file_size / 100 {
+            if cur_pos - pb.position() > file_size.unwrap() / 100 {
                 pb.set_position(cur_pos);
             }
         });
@@ -208,24 +244,32 @@ fn main() -> Result<(), CliError> {
 
     progressbar.map(|pb| pb.finish());
 
-    println!("Total offers: {}", total_offers);
-    println!("Offers with errors: {}", offers_with_errors);
+    println!("Total offers: {total_offers}");
+    println!("Offers with errors: {offers_with_errors}");
 
     Ok(())
 }
 
-fn open_market_xml_file(file_path: &Path) -> Result<(Box<dyn BufRead>, u64), io::Error> {
+fn ensure_output_dir(output_dir: &Path) -> Result<(), CliError> {
+    if !output_dir.exists() {
+        create_dir_all(&output_dir)
+            .context(CreateOutputDir { path: output_dir.clone() })?;
+    }
+    Ok(())
+}
+
+fn open_market_xml_file(file_path: &Path) -> Result<(Box<dyn BufRead>, Option<u64>), io::Error> {
     let mut file = File::open(file_path)?;
     match file_path.extension() {
         Some(ext) if ext == OsStr::new("gz") => {
             let file_size = get_gzip_file_uncompressed_size(&mut file)? as u64;
             let reader = BufReader::new(GzDecoder::new(BufReader::new(file)));
-            Ok((Box::new(reader), file_size))
+            Ok((Box::new(reader), Some(file_size)))
         }
         _ => {
             let file_size = fs::metadata(file_path)?.len();
             let reader = BufReader::new(file);
-            Ok((Box::new(reader), file_size))
+            Ok((Box::new(reader), Some(file_size)))
         }
     }
 }
