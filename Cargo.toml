@@ -26,7 +26,7 @@ prost = "0.12"
 prost-types = "0.12"
 # quick-xml = "0.22"
 quick-xml = { git = "https://github.com/anti-social/quick-xml", rev = "5ef43af" }
-reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "default-tls", "gzip"] }
+reqwest = { version = "0.11.22", default-features = false, features = ["blocking", "gzip", "native-tls-vendored"] }
 snafu = "0.7"
 snafu-derive = "0.7"
 
