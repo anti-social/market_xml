@@ -253,7 +253,7 @@ fn main() -> Result<(), CliError> {
 fn ensure_output_dir(output_dir: &Path) -> Result<(), CliError> {
     if !output_dir.exists() {
         create_dir_all(&output_dir)
-            .context(CreateOutputDirSnafu { path: output_dir.clone() })?;
+            .context(CreateOutputDirSnafu { path: output_dir })?;
     }
     Ok(())
 }
