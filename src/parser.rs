@@ -145,8 +145,8 @@ impl<B: BufRead> MarketXmlParser<B> {
         self.xml_reader.buffer_position()
     }
 
-    fn xml_err_ctx(&self) -> Xml<usize, usize> {
-        Xml {
+    fn xml_err_ctx(&self) -> XmlSnafu<usize, usize> {
+        XmlSnafu {
             line: self.cur_line(),
             column: self.cur_column(),
         }

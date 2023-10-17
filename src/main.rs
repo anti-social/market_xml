@@ -77,7 +77,7 @@ fn main() -> Result<(), CliError> {
         let client = reqwest::blocking::ClientBuilder::new()
             .gzip(true)
             .build()
-            .context(Reqwest)?;
+            .context(ReqwestSnafu)?;
         let request = client.get(&opts.xml_file);
         let request = if let Some(if_modified_since) = opts.if_modified_since {
             request.header(reqwest::header::IF_MODIFIED_SINCE, if_modified_since)
@@ -86,7 +86,7 @@ fn main() -> Result<(), CliError> {
         };
         let response = request
             .send()
-            .context(Reqwest)?;
+            .context(ReqwestSnafu)?;
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
             println!("Not modified");
             return Ok(());
@@ -97,13 +97,13 @@ fn main() -> Result<(), CliError> {
             }
             let last_modified_path = opts.output_dir.join("last-modified.txt");
             std::fs::write(&last_modified_path, last_modified)
-                .context(WriteOutputFile { path: last_modified_path })?;
+                .context(WriteOutputFileSnafu { path: last_modified_path })?;
         }
         let content_length = response.content_length();
         (Box::new(BufReader::new(response)) as Box<dyn BufRead>, content_length)
     } else {
         open_market_xml_file(PathBuf::from(&opts.xml_file).as_path())
-            .context(OpenInputFile { path: opts.xml_file })?
+            .context(OpenInputFileSnafu { path: opts.xml_file })?
     };
     let mut parser = MarketXmlParser::new(MarketXmlConfig::default(), file_reader);
 
@@ -253,7 +253,7 @@ fn main() -> Result<(), CliError> {
 fn ensure_output_dir(output_dir: &Path) -> Result<(), CliError> {
     if !output_dir.exists() {
         create_dir_all(&output_dir)
-            .context(CreateOutputDir { path: output_dir.clone() })?;
+            .context(CreateOutputDirSnafu { path: output_dir.clone() })?;
     }
     Ok(())
 }
@@ -289,10 +289,10 @@ fn write_message<M: Message>(
     file_path.push(file_name);
     let mut file = OpenOptions::new().create_new(true).write(true)
         .open(&file_path)
-        .context(OpenOutputFile { path: file_path.clone() })?;
-    msg.encode(buf).context(ProtobufEncode)?;
+        .context(OpenOutputFileSnafu { path: file_path.clone() })?;
+    msg.encode(buf).context(ProtobufEncodeSnafu)?;
     file.write_all(buf)
-        .context(WriteOutputFile { path: file_path.clone() })?;
+        .context(WriteOutputFileSnafu { path: file_path.clone() })?;
     buf.clear();
 
     Ok(file_path)
@@ -309,7 +309,7 @@ impl DelimitedMessageWriter {
         file_path.push(file_name);
         let file = OpenOptions::new().create_new(true).write(true)
             .open(&file_path)
-            .context(OpenOutputFile { path: file_path.clone() })?;
+            .context(OpenOutputFileSnafu { path: file_path.clone() })?;
         Ok(Self {
             file_path,
             writer: BufWriter::new(file),
@@ -317,9 +317,9 @@ impl DelimitedMessageWriter {
     }
 
     fn write<M: Message>(&mut self, msg: &M, buf: &mut BytesMut) -> Result<(), CliError> {
-        msg.encode_length_delimited(buf).context(ProtobufEncode)?;
+        msg.encode_length_delimited(buf).context(ProtobufEncodeSnafu)?;
         self.writer.write_all(buf)
-            .context(WriteOutputFile { path: self.file_path.clone() })?;
+            .context(WriteOutputFileSnafu { path: self.file_path.clone() })?;
         buf.clear();
     
         Ok(())
