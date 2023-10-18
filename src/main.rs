@@ -79,16 +79,22 @@ fn main() -> Result<(), CliError> {
             .build()
             .context(ReqwestSnafu)?;
         let request = client.get(&opts.xml_file);
-        let request = if let Some(if_modified_since) = opts.if_modified_since {
-            request.header(reqwest::header::IF_MODIFIED_SINCE, if_modified_since)
+        let (request, not_modified_msg) = if let Some(ref if_modified_since) = opts.if_modified_since {
+            (
+                request.header(reqwest::header::IF_MODIFIED_SINCE, if_modified_since),
+                format!("Not modified since: {if_modified_since}")
+            )
         } else {
-            request
+            (
+                request,
+                format!("Not modified")
+            )
         };
         let response = request
             .send()
             .context(ReqwestSnafu)?;
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-            println!("Not modified");
+            println!("{not_modified_msg}");
             return Ok(());
         }
         if let Some(Ok(last_modified)) = response.headers().get(reqwest::header::LAST_MODIFIED).map(|v| v.to_str()) {
