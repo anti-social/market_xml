@@ -94,7 +94,7 @@ fn main() -> Result<(), CliError> {
             .send()
             .context(ReqwestSnafu)?;
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
-            println!("{not_modified_msg}");
+            log::info!("{not_modified_msg}");
             return Ok(());
         }
         if let Some(Ok(last_modified)) = response.headers().get(reqwest::header::LAST_MODIFIED).map(|v| v.to_str()) {
@@ -137,10 +137,11 @@ fn main() -> Result<(), CliError> {
     let mut availability_missing_offer_ids = market_xml::OfferIds::default();
     let mut chunk_ix = 0;
     let mut chunk_offers = 0;
+    let mut offers_filename = format!("offers-{}.protobuf-delimited", chunk_ix);
     let mut offers_writer = if !opts.dry_run {
         Some(
             DelimitedMessageWriter::open(
-                &opts.output_dir, &format!("offers-{}.protobuf-delimited", chunk_ix)
+                &opts.output_dir, &offers_filename
             )?
         )
     } else {
@@ -172,18 +173,26 @@ fn main() -> Result<(), CliError> {
                 if chunk_offers == opts.offers_chunk_size {
                     chunk_ix += 1;
                     chunk_offers = 0;
-                    offers_writer = Some(
-                        DelimitedMessageWriter::open(
-                            &opts.output_dir, &format!("offers-{}.protobuf-delimited", chunk_ix)
-                        )?
-                    );
+                    println!("{offers_filename}");
+                    offers_filename = format!("offers-{}.protobuf-delimited", chunk_ix);
+                    offers_writer = if !opts.dry_run {
+                        Some(
+                            DelimitedMessageWriter::open(
+                                &opts.output_dir, &offers_filename
+                            )?
+                        )
+                    } else {
+                        None
+                    };
                 }
                 total_offers += 1;
             }
             Ok(ParsedItem::YmlCatalog(yml_catalog)) => {
+                let catalog_filename = "yml_catalog.protobuf";
                 if !opts.dry_run {
-                    write_message(&opts.output_dir, "yml_catalog.protobuf", &yml_catalog, &mut buf)?;
+                    write_message(&opts.output_dir, catalog_filename, &yml_catalog, &mut buf)?;
                 }
+                println!("{catalog_filename}");
             }
             Ok(ParsedItem::Eof) => {
                 break;
@@ -220,38 +229,49 @@ fn main() -> Result<(), CliError> {
 
     if !opts.dry_run {
         available_offer_ids.ids.sort_unstable();
-        unavailable_offer_ids.ids.sort_unstable();
-        availability_missing_offer_ids.ids.sort_unstable();
+
+        let offer_ids_available_filename = "offer-ids-available.protobuf";
         write_message(
             &opts.output_dir,
-            &format!("offer-ids-available.protobuf"),
+            offer_ids_available_filename,
             &available_offer_ids,
             &mut buf
         )?;
+        println!("{offer_ids_available_filename}");
+
+        let offer_ids_unavailable_filename = "offer-ids-unavailable.protobuf";
+        unavailable_offer_ids.ids.sort_unstable();
         write_message(
             &opts.output_dir,
             &format!("offer-ids-unavailable.protobuf"),
             &unavailable_offer_ids,
             &mut buf
         )?;
+        println!("{offer_ids_unavailable_filename}");
+
+        let offer_ids_missing_filename = "offer-ids-availability-missing.protobuf";
+        availability_missing_offer_ids.ids.sort_unstable();
         write_message(
             &opts.output_dir,
             &format!("offer-ids-availability-missing.protobuf"),
             &availability_missing_offer_ids,
             &mut buf
         )?;
+        println!("{offer_ids_missing_filename}");
     }
 
     if !errors.errors.is_empty() && !opts.dry_run {
+        let errors_filename = "errors.protobuf";
         write_message(
-            &opts.output_dir, "errors.protobuf", &errors, &mut buf
+            &opts.output_dir, errors_filename, &errors, &mut buf
         )?;
+        println!("{errors_filename}");
     }
 
     progressbar.map(|pb| pb.finish());
 
-    println!("Total offers: {total_offers}");
-    println!("Offers with errors: {offers_with_errors}");
+    log::info!("Total offers: {total_offers}");
+    log::info!("Offers with errors: {offers_with_errors}");
 
     Ok(())
 }
